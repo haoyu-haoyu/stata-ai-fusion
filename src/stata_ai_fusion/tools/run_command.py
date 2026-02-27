@@ -95,16 +95,29 @@ async def handle(
     if output_text.strip():
         contents.append(TextContent(type="text", text=output_text.strip()))
 
-    # Graph images
-    for graph in result.graphs:
-        mime = f"image/{graph.format}" if graph.format != "pdf" else "application/pdf"
-        contents.append(
-            ImageContent(
-                type="image",
-                data=graph.base64,
-                mimeType=mime,
+    # Graph images — cap inline images to avoid flooding the AI context.
+    _max_inline = 5
+    for i, graph in enumerate(result.graphs):
+        if i < _max_inline:
+            mime = f"image/{graph.format}" if graph.format != "pdf" else "application/pdf"
+            contents.append(
+                ImageContent(
+                    type="image",
+                    data=graph.base64,
+                    mimeType=mime,
+                )
             )
+
+    if len(result.graphs) > _max_inline:
+        extra_paths = [str(g.path) for g in result.graphs[_max_inline:]]
+        summary = (
+            f"\n\n--- {len(result.graphs)} graphs produced, "
+            f"{_max_inline} shown inline ---\n"
+            f"Remaining {len(extra_paths)} graph(s) saved to:\n"
+            + "\n".join(f"  • {p}" for p in extra_paths)
+            + "\nUse stata_export_graph to view them."
         )
+        contents.append(TextContent(type="text", text=summary.strip()))
 
     if not contents:
         contents.append(TextContent(type="text", text="(no output)"))

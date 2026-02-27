@@ -58,7 +58,18 @@ TOOL_DEF = Tool(
 )
 
 # Maximum characters of Stata log output to return to the AI.
-_MAX_OUTPUT_CHARS = 30_000
+# We keep the head and tail of the output to capture both early
+# context (e.g. data loading messages) and late results/errors.
+_HEAD_CHARS = 3_000
+_TAIL_CHARS = 5_000
+# Legacy absolute cap — used only when the combined head+tail would
+# exceed this anyway (i.e. short output that needs no truncation).
+_MAX_OUTPUT_CHARS = _HEAD_CHARS + _TAIL_CHARS + 200  # small margin
+
+# Maximum number of graph images returned inline.  Extra graphs are
+# reported as file paths only — the AI can request them individually
+# via the ``stata_export_graph`` tool if needed.
+_MAX_INLINE_GRAPHS = 3
 
 
 async def handle(
@@ -173,9 +184,17 @@ async def handle(
 
     cleaned = strip_smcl(raw_output)
 
-    # Truncate very large output.
+    # Smart truncation: keep the head (loading/setup) and tail (results/errors).
     if len(cleaned) > _MAX_OUTPUT_CHARS:
-        cleaned = cleaned[:_MAX_OUTPUT_CHARS] + "\n\n... (output truncated at 30,000 chars)"
+        head = cleaned[:_HEAD_CHARS]
+        tail = cleaned[-_TAIL_CHARS:]
+        omitted = len(cleaned) - _HEAD_CHARS - _TAIL_CHARS
+        cleaned = (
+            f"{head}\n\n"
+            f"... ({omitted:,} characters omitted — "
+            f"full output in log file: {log_file}) ...\n\n"
+            f"{tail}"
+        )
 
     # ---- Error detection -------------------------------------------------
 
@@ -206,16 +225,30 @@ async def handle(
     if output_text.strip():
         contents.append(TextContent(type="text", text=output_text.strip()))
 
-    # Graph images
-    for graph in graphs:
-        mime = f"image/{graph.format}" if graph.format != "pdf" else "application/pdf"
-        contents.append(
-            ImageContent(
-                type="image",
-                data=graph.base64,
-                mimeType=mime,
+    # Graph images — inline only the first few to save AI context tokens.
+    # Extra graphs are reported as file paths so the AI can retrieve them
+    # on demand via the ``stata_export_graph`` tool.
+    for i, graph in enumerate(graphs):
+        if i < _MAX_INLINE_GRAPHS:
+            mime = f"image/{graph.format}" if graph.format != "pdf" else "application/pdf"
+            contents.append(
+                ImageContent(
+                    type="image",
+                    data=graph.base64,
+                    mimeType=mime,
+                )
             )
+
+    if len(graphs) > _MAX_INLINE_GRAPHS:
+        extra_paths = [str(g.path) for g in graphs[_MAX_INLINE_GRAPHS:]]
+        summary = (
+            f"\n\n--- {len(graphs)} graphs produced, "
+            f"{_MAX_INLINE_GRAPHS} shown inline ---\n"
+            f"Remaining {len(extra_paths)} graph(s) saved to:\n"
+            + "\n".join(f"  • {p}" for p in extra_paths)
+            + "\nUse stata_export_graph to view them."
         )
+        contents.append(TextContent(type="text", text=summary.strip()))
 
     if not contents:
         contents.append(TextContent(type="text", text="(no output)"))
