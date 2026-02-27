@@ -120,11 +120,9 @@ async def handle(
     # ---- Run in batch mode -----------------------------------------------
 
     start_time = time.monotonic()
-    proc: subprocess.Popen | None = None
 
     try:
-        def _run_batch() -> tuple[int, str]:
-            nonlocal proc
+        def _run_batch() -> int:
             proc = subprocess.Popen(
                 [stata_path, "-b", "do", str(do_path)],
                 cwd=str(working_directory),
@@ -142,7 +140,7 @@ async def handle(
                     proc.kill()
                 proc.wait()
                 raise
-            return proc.returncode, ""
+            return proc.returncode
 
         await anyio.to_thread.run_sync(_run_batch)
 

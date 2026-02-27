@@ -59,16 +59,7 @@ TOOL_DEF = Tool(
 
 
 def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_run_command`` tool with the MCP server."""
-
-    @server.list_tools()
-    async def _list() -> list[Tool]:  # noqa: F811
-        # This will be merged via register_all_tools; individual list_tools
-        # registrations are handled by the __init__.register_all_tools wrapper.
-        return [TOOL_DEF]
-
-    # The actual handler is registered via the central call_tool dispatcher
-    # in tools/__init__.py.
+    """Registration is handled by the central dispatcher in tools/__init__.py."""
 
 
 async def handle(

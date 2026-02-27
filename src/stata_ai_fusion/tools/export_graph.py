@@ -101,7 +101,7 @@ async def handle(
     out_name = f"{stem}.{fmt}"
 
     # Use the session tmpdir for output
-    tmpdir = session._tmpdir  # noqa: SLF001
+    tmpdir = session.tmpdir
     out_path = tmpdir / out_name
 
     code = f'graph export "{out_path}", width({width}) replace'

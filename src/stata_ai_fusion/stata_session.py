@@ -98,8 +98,11 @@ def strip_smcl(text: str) -> str:
         return _SMCL_CHAR_MAP.get(key, "")
 
     text = _SMCL_CHAR_RE.sub(_replace_char, text)
-    # Strip all remaining SMCL tags.
-    text = _SMCL_TAG_RE.sub("", text)
+    # Strip all remaining SMCL tags — loop to handle nested tags.
+    prev = None
+    while prev != text:
+        prev = text
+        text = _SMCL_TAG_RE.sub("", text)
     return text
 
 
@@ -340,6 +343,11 @@ class StataSession:
             return self._process.isalive()
         except Exception:
             return False
+
+    @property
+    def tmpdir(self) -> Path:
+        """Return the session's temporary directory."""
+        return self._tmpdir
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -602,15 +610,15 @@ class StataSession:
         skip_do_echo = True
         for line in lines:
             stripped = line.strip()
-            # Skip the echoed "do ..." line and the "end of do-file" marker.
-            if skip_do_echo and (
-                stripped.startswith(f'do "{do_file}')
-                or stripped.startswith("do ")
-                or stripped == ""
-            ):
-                if stripped.startswith("do "):
+            # Skip the echoed "do ..." line and leading blank lines before it.
+            if skip_do_echo:
+                if stripped.startswith(f'do "{do_file}') or stripped.startswith("do "):
                     skip_do_echo = False
-                continue
+                    continue
+                if stripped == "":
+                    continue  # skip blank lines before the do-echo only
+                # Non-blank, non-do line means Stata didn't echo; stop skipping.
+                skip_do_echo = False
             if stripped == "end of do-file":
                 continue
             # Skip continuation-prompt residue that references the .do file.
@@ -685,10 +693,24 @@ class BatchSession:
         _cleanup_temp_dir(self._tmpdir)
         log.info("BatchSession %s closed", self.session_id)
 
+    def send_interrupt(self) -> bool:
+        """Batch sessions have no persistent process to interrupt.
+
+        Returns ``False`` always.  Callers should check the return value
+        and inform the user that cancellation is not supported in batch mode.
+        """
+        log.info("send_interrupt called on BatchSession %s (no-op)", self.session_id)
+        return False
+
     @property
     def is_alive(self) -> bool:
         """Batch sessions are always 'alive' once started."""
         return self._started
+
+    @property
+    def tmpdir(self) -> Path:
+        """Return the session's temporary directory."""
+        return self._tmpdir
 
     # ------------------------------------------------------------------
     # Execution
@@ -915,6 +937,16 @@ class SessionManager:
             self._last_activity[session_id] = time.monotonic()
             return session
 
+    async def get_session(self, session_id: str) -> StataSession | BatchSession | None:
+        """Return an existing session without creating a new one.
+
+        Returns ``None`` if the session does not exist.  This is safe to
+        call even while another command is running (it only acquires the
+        manager lock briefly to read the dict).
+        """
+        async with self._lock:
+            return self._sessions.get(session_id)
+
     async def close_session(self, session_id: str) -> None:
         """Close and remove a single session by ID.
 
@@ -949,7 +981,14 @@ class SessionManager:
     async def close_all(self) -> None:
         """Close every tracked session."""
         async with self._lock:
-            session_ids = list(self._sessions.keys())
-        for sid in session_ids:
-            await self.close_session(sid)
+            sessions_to_close = dict(self._sessions)
+            self._sessions.clear()
+            self._last_activity.clear()
+
+        for sid, session in sessions_to_close.items():
+            try:
+                await session.close()
+                log.info("Session %s closed during close_all", sid)
+            except Exception:
+                log.warning("Error closing session %s during close_all", sid, exc_info=True)
         log.info("All sessions closed")

@@ -11,7 +11,7 @@ import base64
 import logging
 import re
 import struct
-import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -268,7 +268,6 @@ def maybe_inject_graph_export(code: str, tmpdir: Path) -> str:
     # earlier insertion positions stay valid.
     lines = code.split("\n")
     result_lines = list(lines)  # mutable copy
-    inject_count = 0
 
     for m in reversed(matches):
         # Find which line number the match falls on.
@@ -285,13 +284,12 @@ def maybe_inject_graph_export(code: str, tmpdir: Path) -> str:
             else:
                 break
 
-        timestamp = int(time.time() * 1000) + inject_count
-        export_path = tmpdir / f"stata_graph_{timestamp}.png"
+        unique_id = uuid.uuid4().hex[:12]
+        export_path = tmpdir / f"stata_graph_{unique_id}.png"
         export_line = f'quietly graph export "{export_path}", width(2000) replace'
         log.info("Auto-injecting graph export: %s", export_path.name)
 
         # Insert the export line after end_idx.
         result_lines.insert(end_idx + 1, export_line)
-        inject_count += 1
 
     return "\n".join(result_lines)

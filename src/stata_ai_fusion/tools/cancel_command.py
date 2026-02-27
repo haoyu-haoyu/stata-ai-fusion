@@ -49,7 +49,7 @@ async def handle(
 
     # Look up the session *without* creating a new one or blocking on the
     # session lock (get_or_create would block if a command is running).
-    session = session_manager._sessions.get(session_id)
+    session = await session_manager.get_session(session_id)
 
     if session is None:
         return [
@@ -59,8 +59,11 @@ async def handle(
             )
         ]
 
-    # Only interactive sessions support send_interrupt.
-    if not hasattr(session, "send_interrupt"):
+    # Both session types now have send_interrupt, but BatchSession always
+    # returns False.  Check the type explicitly for a clearer message.
+    from ..stata_session import BatchSession
+
+    if isinstance(session, BatchSession):
         return [
             TextContent(
                 type="text",
