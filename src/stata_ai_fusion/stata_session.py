@@ -19,8 +19,6 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 import anyio
 
 try:
@@ -33,9 +31,6 @@ except ImportError:  # pragma: no cover
 
 from .graph_cache import GraphArtifact, GraphCache, maybe_inject_graph_export
 from .stata_discovery import StataInstallation
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger(__name__)
 
@@ -603,7 +598,13 @@ class StataSession:
 
     @staticmethod
     def _clean_do_output(output: str, do_file: Path) -> str:
-        """Remove the echoed ``do`` command and surrounding noise."""
+        """Remove the echoed ``do`` command and surrounding noise.
+
+        Stata echoes each command from a .do file with a leading ". ".
+        We strip those echo lines but preserve output lines that happen
+        to start with ". " by only removing lines that look like echoed
+        Stata commands (". " followed by a known command token or blank).
+        """
         do_file_stem = do_file.stem
         lines = output.splitlines()
         cleaned: list[str] = []
@@ -624,10 +625,18 @@ class StataSession:
             # Skip continuation-prompt residue that references the .do file.
             if stripped.startswith("> ") and do_file_stem in stripped:
                 continue
-            # Skip echoed commands from the .do file (Stata echoes each
-            # command with a leading ". " when running a .do file).
-            if stripped.startswith(". "):
-                continue
+            # Skip echoed commands from the .do file.  Stata echoes each
+            # command with a leading ". ".  Only strip lines that look like
+            # actual command echoes (". " followed by non-numeric content)
+            # to avoid eating output that starts with ". " (e.g. decimal
+            # numbers or continuation lines).
+            if stripped.startswith(". ") and len(stripped) > 2:
+                after_dot = stripped[2:]
+                # Echoed commands start with a letter, underscore, or known
+                # Stata prefix (quietly, capture, noisily, etc.).  Numeric
+                # output (like ".1234") or punctuation should be kept.
+                if after_dot[:1].isalpha() or after_dot[:1] == "_":
+                    continue
             cleaned.append(line)
 
         # Strip trailing prompt residue: standalone "." lines at the end.

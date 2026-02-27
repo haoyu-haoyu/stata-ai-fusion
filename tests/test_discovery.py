@@ -83,9 +83,7 @@ class TestEditionDetection:
             ("StataMP-64.exe", "MP"),  # stem "StataMP-64" -> "statamp-64" -> MP
             ("StataSE-64.exe", "SE"),  # stem "StataSE-64" -> "statase-64" -> SE
             ("Stata.exe", "IC"),  # stem "Stata" -> "stata" -> IC
-            # "StataBE-64.exe" stem -> "statabe-64" is not in _EDITION_MAP,
-            # so it falls back to IC.  This is a known limitation.
-            ("StataBE-64.exe", "IC"),
+            ("StataBE-64.exe", "BE"),  # stem "StataBE-64" -> "statabe-64" -> BE
         ],
     )
     def test_known_editions(self, name: str, expected: str):

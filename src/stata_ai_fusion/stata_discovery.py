@@ -41,10 +41,8 @@ _EDITION_MAP: dict[str, str] = {
     "stata-64": "IC",
     "stata-be": "BE",
     "statabe": "BE",
+    "statabe-64": "BE",
 }
-
-# Preferred order when multiple editions live in the same directory.
-_EDITION_PRIORITY = ("MP", "SE", "IC", "BE")
 
 
 def _edition_from_name(name: str) -> str:

@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING
 from mcp.types import ImageContent, TextContent, Tool
 
 if TYPE_CHECKING:
-    from mcp.server import Server
-
     from ..stata_session import SessionManager
 
 log = logging.getLogger(__name__)
@@ -56,10 +54,6 @@ TOOL_DEF = Tool(
         "required": ["code"],
     },
 )
-
-
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Registration is handled by the central dispatcher in tools/__init__.py."""
 
 
 async def handle(

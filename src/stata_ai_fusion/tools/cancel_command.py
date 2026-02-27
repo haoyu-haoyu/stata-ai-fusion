@@ -36,10 +36,6 @@ TOOL_DEF = Tool(
 )
 
 
-def register(server, session_manager) -> None:  # noqa: ANN001
-    """Registration is handled by the central dispatcher in tools/__init__.py."""
-
-
 async def handle(
     session_manager,  # noqa: ANN001
     arguments: dict,

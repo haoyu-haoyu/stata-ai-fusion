@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING
 from mcp.types import ImageContent, TextContent, Tool
 
 if TYPE_CHECKING:
-    from mcp.server import Server
-
     from ..stata_session import SessionManager
 
 log = logging.getLogger(__name__)
@@ -58,11 +56,6 @@ TOOL_DEF = Tool(
         },
     },
 )
-
-
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_export_graph`` tool with the MCP server."""
-    pass
 
 
 async def handle(
