@@ -237,33 +237,64 @@ _HAS_EXPORT_RE = re.compile(
 
 
 def maybe_inject_graph_export(code: str, tmpdir: Path) -> str:
-    """Append a ``graph export`` command if the code draws a graph but lacks one.
+    """Append ``graph export`` after each graph command that lacks one.
 
     Parameters
     ----------
     code:
         One or more Stata commands (may span multiple lines).
     tmpdir:
-        Temporary directory where the exported PNG should be written.
+        Temporary directory where the exported PNGs should be written.
 
     Returns
     -------
     str
-        The original *code* with an appended ``graph export`` line when
-        injection is appropriate, or the unchanged *code* otherwise.
+        The original *code* with ``graph export`` lines injected after
+        each graphing command that is not already followed by an export.
     """
-    # Nothing to do if the code already exports a graph.
+    # If the code already contains a graph export, assume the user manages
+    # exports manually and don't interfere.
     if _HAS_EXPORT_RE.search(code):
         log.debug("Code already contains `graph export`; skipping injection.")
         return code
 
-    # Nothing to do if no graphing command is detected.
-    if not _GRAPH_CMD_RE.search(code):
+    # Find all graph command positions.
+    matches = list(_GRAPH_CMD_RE.finditer(code))
+    if not matches:
         return code
 
-    timestamp = int(time.time() * 1000)
-    export_path = tmpdir / f"stata_graph_{timestamp}.png"
+    # Build the new code by inserting an export after each graph command.
+    # Work backwards so that earlier insertion offsets stay valid.
+    result = code
+    for i, m in enumerate(reversed(matches)):
+        # Find the end of the line containing the graph command.
+        line_end = result.find("\n", m.end())
+        if line_end == -1:
+            line_end = len(result)
 
-    export_line = f'\nquietly graph export "{export_path}", width(2000) replace'
-    log.info("Auto-injecting graph export: %s", export_path.name)
-    return code.rstrip() + export_line
+        # But the command may span multiple lines via /// continuation.
+        # Walk forward past continuation lines.
+        pos = line_end
+        while pos < len(result):
+            next_line_end = result.find("\n", pos + 1)
+            if next_line_end == -1:
+                next_line_end = len(result)
+            next_line = result[pos + 1 : next_line_end].strip()
+            # Check if the previous line ended with ///
+            prev_content = result[:pos].rstrip()
+            if prev_content.endswith("///") or next_line.startswith("///"):
+                pos = next_line_end
+            elif next_line.startswith(">"):
+                # Continuation prompt residue
+                pos = next_line_end
+            else:
+                break
+        insert_pos = pos
+
+        timestamp = int(time.time() * 1000) + i  # unique per graph
+        export_path = tmpdir / f"stata_graph_{timestamp}.png"
+        export_line = f'\nquietly graph export "{export_path}", width(2000) replace'
+        log.info("Auto-injecting graph export: %s", export_path.name)
+        result = result[:insert_pos] + export_line + result[insert_pos:]
+
+    return result

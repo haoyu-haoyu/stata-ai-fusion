@@ -12,13 +12,11 @@ detected via the :class:`GraphCache` snapshot-diff mechanism.
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import signal
 import subprocess
 import time
-import uuid
 from pathlib import Path
 
 import anyio
@@ -111,6 +109,13 @@ async def handle(
 
     # The .log file Stata creates has the same stem as the .do file.
     log_file = working_directory / f"{do_path.stem}.log"
+
+    # Remove stale log file from a previous run to avoid reading old output.
+    if log_file.exists():
+        try:
+            log_file.unlink()
+        except OSError:
+            pass
 
     # ---- Run in batch mode -----------------------------------------------
 

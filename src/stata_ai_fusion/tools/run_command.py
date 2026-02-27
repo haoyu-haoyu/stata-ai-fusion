@@ -23,11 +23,12 @@ TOOL_NAME = "stata_run_command"
 TOOL_DEF = Tool(
     name=TOOL_NAME,
     description=(
-        "Execute one or more Stata commands. Returns the text output (with SMCL "
-        "markup stripped) and any graphs produced as inline images. "
-        "Use this for ad-hoc Stata work: loading data, running regressions, "
-        "generating tables, creating graphs, etc. Multiple commands can be "
-        "separated by newlines."
+        "Execute one or more Stata commands interactively. Returns text output "
+        "(SMCL stripped) and any graphs as inline images. Best for short ad-hoc "
+        "commands: loading data, running regressions, generating tables, etc. "
+        "For complete .do files or long-running models (mixed, bootstrap, "
+        "simulate), use stata_run_do_file instead — it runs in batch mode "
+        "and handles long execution times reliably without timeout risk."
     ),
     inputSchema={
         "type": "object",

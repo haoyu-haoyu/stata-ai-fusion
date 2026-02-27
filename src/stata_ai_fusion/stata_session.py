@@ -314,7 +314,11 @@ class StataSession:
                     except (pexpect.TIMEOUT, pexpect.EOF):
                         pass
                     if self._process.isalive():
-                        self._process.terminate(force=True)
+                        # Kill the entire process group, same as _kill_process().
+                        try:
+                            os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+                        except (ProcessLookupError, PermissionError, OSError):
+                            self._process.terminate(force=True)
             except Exception:
                 log.warning(
                     "Error closing session %s",
@@ -766,16 +770,31 @@ class BatchSession:
             )
 
     def _run_batch(self, do_file: Path, log_file: Path, timeout: int) -> str:
-        """Synchronous helper: run Stata in batch mode and read the log."""
+        """Synchronous helper: run Stata in batch mode and read the log.
+
+        Uses ``start_new_session=True`` so that on timeout the entire
+        process group (including Stata-MP worker processes) can be killed
+        cleanly via ``os.killpg``.
+        """
         stata_path = str(self.installation.path)
 
-        subprocess.run(
+        proc = subprocess.Popen(
             [stata_path, "-b", "do", str(do_file)],
             cwd=str(self._tmpdir),
-            timeout=timeout,
-            capture_output=True,
-            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the entire process group.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
+            proc.wait()
+            raise
 
         # Stata writes output to a .log file with the same stem.
         if log_file.exists():
@@ -817,10 +836,13 @@ class SessionManager:
         installation: StataInstallation,
         *,
         use_batch: bool | None = None,
+        session_timeout: int = 3600,
     ) -> None:
         self._sessions: dict[str, StataSession | BatchSession] = {}
         self._lock: anyio.Lock = anyio.Lock()
         self.installation = installation
+        self._session_timeout = session_timeout
+        self._last_activity: dict[str, float] = {}
         if use_batch is None:
             self._use_batch = not HAS_PEXPECT
         else:
@@ -849,6 +871,23 @@ class SessionManager:
         StataSession | BatchSession
         """
         async with self._lock:
+            # Expire idle sessions.
+            now = time.monotonic()
+            expired = [
+                sid for sid, last in self._last_activity.items()
+                if now - last > self._session_timeout
+                and sid in self._sessions
+            ]
+            for sid in expired:
+                sess = self._sessions.pop(sid)
+                self._last_activity.pop(sid, None)
+                log.info("Session %s expired after %ds idle", sid, self._session_timeout)
+                # Close in background to avoid blocking the lock.
+                try:
+                    await sess.close()
+                except Exception:
+                    log.warning("Error closing expired session %s", sid, exc_info=True)
+
             if session_id in self._sessions:
                 session = self._sessions[session_id]
                 # Auto-restart if dead.
@@ -858,7 +897,9 @@ class SessionManager:
                         session_id,
                     )
                     del self._sessions[session_id]
+                    self._last_activity.pop(session_id, None)
                 else:
+                    self._last_activity[session_id] = time.monotonic()
                     return session
 
             log.info(
@@ -875,6 +916,7 @@ class SessionManager:
 
             await session.start()
             self._sessions[session_id] = session
+            self._last_activity[session_id] = time.monotonic()
             return session
 
     async def close_session(self, session_id: str) -> None:
@@ -884,6 +926,7 @@ class SessionManager:
         """
         async with self._lock:
             session = self._sessions.pop(session_id, None)
+            self._last_activity.pop(session_id, None)
         if session is not None:
             await session.close()
             log.info("Session %s closed and removed", session_id)
