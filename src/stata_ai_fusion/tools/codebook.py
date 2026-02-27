@@ -7,13 +7,12 @@ for one or more variables in the current dataset.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from mcp.types import TextContent, Tool
 
 if TYPE_CHECKING:
-    from mcp.server import Server
-
     from ..stata_session import SessionManager
 
 log = logging.getLogger(__name__)
@@ -48,9 +47,9 @@ TOOL_DEF = Tool(
 )
 
 
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_codebook`` tool with the MCP server."""
-    pass
+# Allowed characters in variable names: alphanumerics, underscores, spaces,
+# wildcards (* ?), and hyphens (for variable ranges like var1-var10).
+_VALID_VARNAMES_RE = re.compile(r"^[A-Za-z0-9_ *?\-]+$")
 
 
 async def handle(
@@ -68,12 +67,20 @@ async def handle(
         return [TextContent(type="text", text=f"Error creating session: {exc}")]
 
     if variables and variables.strip():
+        if not _VALID_VARNAMES_RE.fullmatch(variables.strip()):
+            return [
+                TextContent(
+                    type="text",
+                    text="Error: variable names must contain only letters, digits, "
+                    "underscores, spaces, hyphens, and wildcards (* ?).",
+                )
+            ]
         code = f"codebook {variables.strip()}, compact"
     else:
         code = "codebook, compact"
 
     try:
-        result = await session.execute(code, timeout=60)
+        result = await session.execute(code, timeout=120)
     except Exception as exc:
         log.error("Execution error in session %s: %s", session_id, exc)
         return [TextContent(type="text", text=f"Execution error: {exc}")]

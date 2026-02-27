@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING
 from mcp.types import ImageContent, TextContent, Tool
 
 if TYPE_CHECKING:
-    from mcp.server import Server
-
     from ..stata_session import SessionManager
 
 log = logging.getLogger(__name__)
@@ -58,19 +56,6 @@ TOOL_DEF = Tool(
 )
 
 
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_run_command`` tool with the MCP server."""
-
-    @server.list_tools()
-    async def _list() -> list[Tool]:  # noqa: F811
-        # This will be merged via register_all_tools; individual list_tools
-        # registrations are handled by the __init__.register_all_tools wrapper.
-        return [TOOL_DEF]
-
-    # The actual handler is registered via the central call_tool dispatcher
-    # in tools/__init__.py.
-
-
 async def handle(
     session_manager: SessionManager,
     arguments: dict,
@@ -79,7 +64,7 @@ async def handle(
     code: str = arguments.get("code", "")
     echo: bool = arguments.get("echo", True)
     session_id: str = arguments.get("session_id", "default")
-    timeout: int = arguments.get("timeout", 120)
+    timeout: int = max(1, min(int(arguments.get("timeout", 120)), 3600))
 
     if not code.strip():
         return [TextContent(type="text", text="Error: no code provided.")]

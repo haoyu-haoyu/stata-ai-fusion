@@ -9,14 +9,12 @@ from __future__ import annotations
 import base64
 import logging
 import re
-import time
+import uuid
 from typing import TYPE_CHECKING
 
 from mcp.types import ImageContent, TextContent, Tool
 
 if TYPE_CHECKING:
-    from mcp.server import Server
-
     from ..stata_session import SessionManager
 
 log = logging.getLogger(__name__)
@@ -60,11 +58,6 @@ TOOL_DEF = Tool(
 )
 
 
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_export_graph`` tool with the MCP server."""
-    pass
-
-
 async def handle(
     session_manager: SessionManager,
     arguments: dict,
@@ -77,6 +70,14 @@ async def handle(
 
     if fmt not in ("png", "pdf", "svg"):
         return [TextContent(type="text", text=f"Error: unsupported format '{fmt}'.")]
+
+    if not (100 <= width <= 10000):
+        return [
+            TextContent(
+                type="text",
+                text="Error: width must be between 100 and 10000.",
+            )
+        ]
 
     try:
         session = await session_manager.get_or_create(session_id)
@@ -97,14 +98,21 @@ async def handle(
                 )
             ]
     else:
-        stem = f"stata_graph_{int(time.time() * 1000)}"
+        stem = f"stata_graph_{uuid.uuid4().hex[:12]}"
     out_name = f"{stem}.{fmt}"
 
-    # Use the session tmpdir for output
-    tmpdir = session._tmpdir  # noqa: SLF001
+    # Use the session tmpdir for output — the tmpdir is created by the
+    # session itself and contains only safe path characters, so embedding
+    # it in the Stata command is safe.  The filename is validated above.
+    tmpdir = session.tmpdir
     out_path = tmpdir / out_name
 
-    code = f'graph export "{out_path}", width({width}) replace'
+    # Use Stata's `cd` to avoid embedding the full path (which could
+    # contain spaces or platform-specific characters) in the export command.
+    code = (
+        f'cd "{tmpdir}"\n'
+        f'graph export "{out_name}", width({width}) replace'
+    )
     try:
         result = await session.execute(code, timeout=30)
     except Exception as exc:

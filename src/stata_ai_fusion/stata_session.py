@@ -19,8 +19,6 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 import anyio
 
 try:
@@ -33,9 +31,6 @@ except ImportError:  # pragma: no cover
 
 from .graph_cache import GraphArtifact, GraphCache, maybe_inject_graph_export
 from .stata_discovery import StataInstallation
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +46,10 @@ _CONTINUATION_PATTERN = r"\r?\n> $"
 # Timeout defaults (seconds)
 _DEFAULT_TIMEOUT = 120
 _START_TIMEOUT = 30
+
+# Maximum number of entries kept in the per-session log buffer.
+# Older entries are evicted in FIFO order to bound memory usage.
+_MAX_LOG_BUFFER_ENTRIES = 1000
 
 # ---------------------------------------------------------------------------
 # SMCL tag stripping
@@ -98,8 +97,11 @@ def strip_smcl(text: str) -> str:
         return _SMCL_CHAR_MAP.get(key, "")
 
     text = _SMCL_CHAR_RE.sub(_replace_char, text)
-    # Strip all remaining SMCL tags.
-    text = _SMCL_TAG_RE.sub("", text)
+    # Strip all remaining SMCL tags — loop to handle nested tags.
+    prev = None
+    while prev != text:
+        prev = text
+        text = _SMCL_TAG_RE.sub("", text)
     return text
 
 
@@ -341,6 +343,11 @@ class StataSession:
         except Exception:
             return False
 
+    @property
+    def tmpdir(self) -> Path:
+        """Return the session's temporary directory."""
+        return self._tmpdir
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -516,7 +523,7 @@ class StataSession:
                 try:
                     do_file.unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    log.debug("Failed to clean up temp do-file: %s", do_file)
 
             elapsed = time.monotonic() - start_time
 
@@ -533,8 +540,10 @@ class StataSession:
             # Detect new graph files.
             graphs = self._graph_cache.detect_changes()
 
-            # Append to log buffer.
+            # Append to log buffer (FIFO eviction to bound memory).
             self._log_buffer.append(cleaned)
+            if len(self._log_buffer) > _MAX_LOG_BUFFER_ENTRIES:
+                self._log_buffer = self._log_buffer[-_MAX_LOG_BUFFER_ENTRIES:]
 
             log.debug(
                 "Session %s execute completed in %.2fs (rc=%d, graphs=%d)",
@@ -595,31 +604,45 @@ class StataSession:
 
     @staticmethod
     def _clean_do_output(output: str, do_file: Path) -> str:
-        """Remove the echoed ``do`` command and surrounding noise."""
+        """Remove the echoed ``do`` command and surrounding noise.
+
+        Stata echoes each command from a .do file with a leading ". ".
+        We strip those echo lines but preserve output lines that happen
+        to start with ". " by only removing lines that look like echoed
+        Stata commands (". " followed by a known command token or blank).
+        """
         do_file_stem = do_file.stem
         lines = output.splitlines()
         cleaned: list[str] = []
         skip_do_echo = True
         for line in lines:
             stripped = line.strip()
-            # Skip the echoed "do ..." line and the "end of do-file" marker.
-            if skip_do_echo and (
-                stripped.startswith(f'do "{do_file}')
-                or stripped.startswith("do ")
-                or stripped == ""
-            ):
-                if stripped.startswith("do "):
+            # Skip the echoed "do ..." line and leading blank lines before it.
+            if skip_do_echo:
+                if stripped.startswith(f'do "{do_file}') or stripped.startswith("do "):
                     skip_do_echo = False
-                continue
+                    continue
+                if stripped == "":
+                    continue  # skip blank lines before the do-echo only
+                # Non-blank, non-do line means Stata didn't echo; stop skipping.
+                skip_do_echo = False
             if stripped == "end of do-file":
                 continue
             # Skip continuation-prompt residue that references the .do file.
             if stripped.startswith("> ") and do_file_stem in stripped:
                 continue
-            # Skip echoed commands from the .do file (Stata echoes each
-            # command with a leading ". " when running a .do file).
-            if stripped.startswith(". "):
-                continue
+            # Skip echoed commands from the .do file.  Stata echoes each
+            # command with a leading ". ".  Only strip lines that look like
+            # actual command echoes (". " followed by non-numeric content)
+            # to avoid eating output that starts with ". " (e.g. decimal
+            # numbers or continuation lines).
+            if stripped.startswith(". ") and len(stripped) > 2:
+                after_dot = stripped[2:]
+                # Echoed commands start with a letter, underscore, or known
+                # Stata prefix (quietly, capture, noisily, etc.).  Numeric
+                # output (like ".1234") or punctuation should be kept.
+                if after_dot[:1].isalpha() or after_dot[:1] == "_":
+                    continue
             cleaned.append(line)
 
         # Strip trailing prompt residue: standalone "." lines at the end.
@@ -685,10 +708,24 @@ class BatchSession:
         _cleanup_temp_dir(self._tmpdir)
         log.info("BatchSession %s closed", self.session_id)
 
+    def send_interrupt(self) -> bool:
+        """Batch sessions have no persistent process to interrupt.
+
+        Returns ``False`` always.  Callers should check the return value
+        and inform the user that cancellation is not supported in batch mode.
+        """
+        log.info("send_interrupt called on BatchSession %s (no-op)", self.session_id)
+        return False
+
     @property
     def is_alive(self) -> bool:
         """Batch sessions are always 'alive' once started."""
         return self._started
+
+    @property
+    def tmpdir(self) -> Path:
+        """Return the session's temporary directory."""
+        return self._tmpdir
 
     # ------------------------------------------------------------------
     # Execution
@@ -748,8 +785,10 @@ class BatchSession:
             # Detect new graph files.
             graphs = self._graph_cache.detect_changes()
 
-            # Append to log buffer.
+            # Append to log buffer (FIFO eviction to bound memory).
             self._log_buffer.append(cleaned)
+            if len(self._log_buffer) > _MAX_LOG_BUFFER_ENTRIES:
+                self._log_buffer = self._log_buffer[-_MAX_LOG_BUFFER_ENTRIES:]
 
             log.debug(
                 "BatchSession %s execute completed in %.2fs (rc=%d, graphs=%d)",
@@ -772,9 +811,8 @@ class BatchSession:
     def _run_batch(self, do_file: Path, log_file: Path, timeout: int) -> str:
         """Synchronous helper: run Stata in batch mode and read the log.
 
-        Uses ``start_new_session=True`` so that on timeout the entire
-        process group (including Stata-MP worker processes) can be killed
-        cleanly via ``os.killpg``.
+        Uses Popen with start_new_session so the entire process group
+        (including Stata-MP workers) can be killed on timeout.
         """
         stata_path = str(self.installation.path)
 
@@ -788,7 +826,6 @@ class BatchSession:
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # Kill the entire process group.
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError, OSError):
@@ -875,16 +912,14 @@ class SessionManager:
             now = time.monotonic()
             expired = [
                 sid for sid, last in self._last_activity.items()
-                if now - last > self._session_timeout
-                and sid in self._sessions
+                if now - last > self._session_timeout and sid in self._sessions
             ]
             for sid in expired:
-                sess = self._sessions.pop(sid)
+                stale = self._sessions.pop(sid)
                 self._last_activity.pop(sid, None)
                 log.info("Session %s expired after %ds idle", sid, self._session_timeout)
-                # Close in background to avoid blocking the lock.
                 try:
-                    await sess.close()
+                    await stale.close()
                 except Exception:
                     log.warning("Error closing expired session %s", sid, exc_info=True)
 
@@ -918,6 +953,16 @@ class SessionManager:
             self._sessions[session_id] = session
             self._last_activity[session_id] = time.monotonic()
             return session
+
+    async def get_session(self, session_id: str) -> StataSession | BatchSession | None:
+        """Return an existing session without creating a new one.
+
+        Returns ``None`` if the session does not exist.  This is safe to
+        call even while another command is running (it only acquires the
+        manager lock briefly to read the dict).
+        """
+        async with self._lock:
+            return self._sessions.get(session_id)
 
     async def close_session(self, session_id: str) -> None:
         """Close and remove a single session by ID.
@@ -953,7 +998,14 @@ class SessionManager:
     async def close_all(self) -> None:
         """Close every tracked session."""
         async with self._lock:
-            session_ids = list(self._sessions.keys())
-        for sid in session_ids:
-            await self.close_session(sid)
+            sessions_to_close = dict(self._sessions)
+            self._sessions.clear()
+            self._last_activity.clear()
+
+        for sid, session in sessions_to_close.items():
+            try:
+                await session.close()
+                log.info("Session %s closed during close_all", sid)
+            except Exception:
+                log.warning("Error closing session %s during close_all", sid, exc_info=True)
         log.info("All sessions closed")

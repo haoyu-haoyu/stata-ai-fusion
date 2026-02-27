@@ -11,7 +11,7 @@ import base64
 import logging
 import re
 import struct
-import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -250,51 +250,46 @@ def maybe_inject_graph_export(code: str, tmpdir: Path) -> str:
     -------
     str
         The original *code* with ``graph export`` lines injected after
-        each graphing command that is not already followed by an export.
+        each graphing command, or the unchanged *code* if no injection
+        is needed.
     """
-    # If the code already contains a graph export, assume the user manages
-    # exports manually and don't interfere.
+    # If the code already contains a graph export, assume the user
+    # manages exports manually.
     if _HAS_EXPORT_RE.search(code):
         log.debug("Code already contains `graph export`; skipping injection.")
         return code
 
-    # Find all graph command positions.
+    # Find all graph command matches.
     matches = list(_GRAPH_CMD_RE.finditer(code))
     if not matches:
         return code
 
-    # Build the new code by inserting an export after each graph command.
-    # Work backwards so that earlier insertion offsets stay valid.
-    result = code
-    for i, m in enumerate(reversed(matches)):
-        # Find the end of the line containing the graph command.
-        line_end = result.find("\n", m.end())
-        if line_end == -1:
-            line_end = len(result)
+    # Insert an export after each graph command.  Work backwards so
+    # earlier insertion positions stay valid.
+    lines = code.split("\n")
+    result_lines = list(lines)  # mutable copy
 
-        # But the command may span multiple lines via /// continuation.
-        # Walk forward past continuation lines.
-        pos = line_end
-        while pos < len(result):
-            next_line_end = result.find("\n", pos + 1)
-            if next_line_end == -1:
-                next_line_end = len(result)
-            next_line = result[pos + 1 : next_line_end].strip()
-            # Check if the previous line ended with ///
-            prev_content = result[:pos].rstrip()
-            if prev_content.endswith("///") or next_line.startswith("///"):
-                pos = next_line_end
-            elif next_line.startswith(">"):
-                # Continuation prompt residue
-                pos = next_line_end
+    for m in reversed(matches):
+        # Find which line number the match falls on.
+        char_pos = m.start()
+        line_idx = code[:char_pos].count("\n")
+
+        # Walk forward to find the end of the command (handle ///
+        # continuation lines).
+        end_idx = line_idx
+        while end_idx < len(result_lines) - 1:
+            stripped = result_lines[end_idx].rstrip()
+            if stripped.endswith("///"):
+                end_idx += 1
             else:
                 break
-        insert_pos = pos
 
-        timestamp = int(time.time() * 1000) + i  # unique per graph
-        export_path = tmpdir / f"stata_graph_{timestamp}.png"
-        export_line = f'\nquietly graph export "{export_path}", width(2000) replace'
+        unique_id = uuid.uuid4().hex[:12]
+        export_path = tmpdir / f"stata_graph_{unique_id}.png"
+        export_line = f'quietly graph export "{export_path}", width(2000) replace'
         log.info("Auto-injecting graph export: %s", export_path.name)
-        result = result[:insert_pos] + export_line + result[insert_pos:]
 
-    return result
+        # Insert the export line after end_idx.
+        result_lines.insert(end_idx + 1, export_line)
+
+    return "\n".join(result_lines)

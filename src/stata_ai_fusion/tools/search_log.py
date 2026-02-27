@@ -13,8 +13,6 @@ from typing import TYPE_CHECKING
 from mcp.types import TextContent, Tool
 
 if TYPE_CHECKING:
-    from mcp.server import Server
-
     from ..stata_session import SessionManager
 
 log = logging.getLogger(__name__)
@@ -61,11 +59,6 @@ TOOL_DEF = Tool(
 )
 
 
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_search_log`` tool with the MCP server."""
-    pass
-
-
 async def handle(
     session_manager: SessionManager,
     arguments: dict,
@@ -80,11 +73,9 @@ async def handle(
     if not query.strip():
         return [TextContent(type="text", text="Error: no search query provided.")]
 
-    try:
-        session = await session_manager.get_or_create(session_id)
-    except Exception as exc:
-        log.error("Failed to get/create session %s: %s", session_id, exc)
-        return [TextContent(type="text", text=f"Error creating session: {exc}")]
+    session = await session_manager.get_session(session_id)
+    if session is None:
+        return [TextContent(type="text", text=f"No active session '{session_id}'.")]
 
     full_log = session.get_log()
     if not full_log.strip():

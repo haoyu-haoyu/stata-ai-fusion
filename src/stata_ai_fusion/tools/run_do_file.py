@@ -61,10 +61,6 @@ TOOL_DEF = Tool(
 _MAX_OUTPUT_CHARS = 30_000
 
 
-def register(server, session_manager) -> None:  # noqa: ANN001
-    """Registration is handled by the central dispatcher in tools/__init__.py."""
-
-
 async def handle(
     session_manager,  # noqa: ANN001
     arguments: dict,
@@ -72,7 +68,7 @@ async def handle(
     """Execute a Stata .do file in batch mode and return content blocks."""
     raw_path: str = arguments.get("path", "")
     session_id: str = arguments.get("session_id", "default")
-    timeout: int = arguments.get("timeout", 300)
+    timeout: int = max(1, min(int(arguments.get("timeout", 300)), 3600))
 
     # ---- Input validation ------------------------------------------------
 
@@ -110,7 +106,7 @@ async def handle(
     # The .log file Stata creates has the same stem as the .do file.
     log_file = working_directory / f"{do_path.stem}.log"
 
-    # Remove stale log file from a previous run to avoid reading old output.
+    # Remove stale log from a previous run to avoid reading old output.
     if log_file.exists():
         try:
             log_file.unlink()
@@ -120,11 +116,9 @@ async def handle(
     # ---- Run in batch mode -----------------------------------------------
 
     start_time = time.monotonic()
-    proc: subprocess.Popen | None = None
 
     try:
-        def _run_batch() -> tuple[int, str]:
-            nonlocal proc
+        def _run_batch() -> int:
             proc = subprocess.Popen(
                 [stata_path, "-b", "do", str(do_path)],
                 cwd=str(working_directory),
@@ -142,9 +136,9 @@ async def handle(
                     proc.kill()
                 proc.wait()
                 raise
-            return proc.returncode, ""
+            return proc.returncode
 
-        await anyio.to_thread.run_sync(_run_batch)
+        batch_rc = await anyio.to_thread.run_sync(_run_batch)
 
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - start_time
@@ -186,6 +180,11 @@ async def handle(
     # ---- Error detection -------------------------------------------------
 
     error_message, error_code = _detect_error(cleaned)
+
+    # If Stata exited with a non-zero return code but _detect_error didn't
+    # find a specific error, flag the non-zero exit explicitly.
+    if batch_rc and batch_rc != 0 and error_message is None:
+        error_message = f"Stata exited with return code {batch_rc}"
 
     # ---- Graph detection -------------------------------------------------
 

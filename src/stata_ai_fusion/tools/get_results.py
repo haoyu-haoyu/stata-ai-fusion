@@ -16,8 +16,6 @@ from mcp.types import TextContent, Tool
 from ..result_extractor import ResultExtractor
 
 if TYPE_CHECKING:
-    from mcp.server import Server
-
     from ..stata_session import SessionManager
 
 log = logging.getLogger(__name__)
@@ -60,11 +58,6 @@ TOOL_DEF = Tool(
         },
     },
 )
-
-
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_get_results`` tool with the MCP server."""
-    pass
 
 
 async def handle(
