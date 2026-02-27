@@ -304,23 +304,16 @@ class StataSession:
         return child
 
     async def close(self) -> None:
-        """Close the Stata process and clean up resources."""
+        """Close the Stata process and clean up resources.
+
+        The blocking pexpect calls (``sendline``, ``expect``) are run in a
+        worker thread so the async event loop is never blocked — even if
+        the Stata process is unresponsive.
+        """
         if self._process is not None:
             log.info("Closing session %s", self.session_id)
             try:
-                if self._process.isalive():
-                    # Send the exit command gracefully.
-                    self._process.sendline("exit, clear")
-                    try:
-                        self._process.expect(pexpect.EOF, timeout=10)
-                    except (pexpect.TIMEOUT, pexpect.EOF):
-                        pass
-                    if self._process.isalive():
-                        # Kill the entire process group, same as _kill_process().
-                        try:
-                            os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
-                        except (ProcessLookupError, PermissionError, OSError):
-                            self._process.terminate(force=True)
+                await anyio.to_thread.run_sync(self._close_sync)
             except Exception:
                 log.warning(
                     "Error closing session %s",
@@ -332,6 +325,28 @@ class StataSession:
                 self._started = False
 
         _cleanup_temp_dir(self._tmpdir)
+
+    def _close_sync(self) -> None:
+        """Synchronous helper that shuts down the Stata process.
+
+        Called from :meth:`close` inside ``anyio.to_thread.run_sync`` so
+        that the blocking pexpect I/O cannot stall the event loop.
+        """
+        proc = self._process
+        if proc is None or not proc.isalive():
+            return
+        # Try a graceful exit first.
+        try:
+            proc.sendline("exit, clear")
+            proc.expect(pexpect.EOF, timeout=10)
+        except (pexpect.TIMEOUT, pexpect.EOF, OSError):
+            pass
+        # If still alive, kill the entire process group.
+        if proc.isalive():
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.terminate(force=True)
 
     @property
     def is_alive(self) -> bool:
