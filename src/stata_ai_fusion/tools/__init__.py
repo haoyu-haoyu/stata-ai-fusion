@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from mcp.types import ImageContent, TextContent, Tool
 
 from . import (
+    cancel_command,
     codebook,
     export_graph,
     get_results,
@@ -42,6 +43,7 @@ _TOOL_MODULES = [
     export_graph,
     search_log,
     install_package,
+    cancel_command,
 ]
 
 _TOOL_REGISTRY: dict[str, tuple[Tool, object]] = {}

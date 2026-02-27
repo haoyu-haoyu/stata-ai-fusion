@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -287,10 +288,17 @@ class StataSession:
             encoding="utf-8",
             timeout=_START_TIMEOUT,
             env={**os.environ, "TERM": "dumb"},
+            preexec_fn=os.setsid,
         )
 
         # Wait for the initial prompt.
         child.expect(r"\. $", timeout=_START_TIMEOUT)
+
+        # Disable GUI graph windows so Stata never blocks waiting for
+        # user interaction in the background.
+        child.sendline("set graphics off")
+        child.expect(r"\. $", timeout=_START_TIMEOUT)
+
         return child
 
     async def close(self) -> None:
@@ -334,16 +342,29 @@ class StataSession:
     # ------------------------------------------------------------------
 
     def _kill_process(self) -> None:
-        """Forcefully kill the Stata process and mark for restart.
+        """Forcefully kill the Stata process *and all its children*, then
+        mark the session for restart.
 
-        Called after a timeout or other unrecoverable state corruption so
-        that :meth:`_ensure_alive` will spawn a clean process on the next
-        :meth:`execute` call.
+        Stata-MP spawns helper worker processes.  A plain ``terminate()``
+        only signals the lead process; the workers can linger and hold the
+        licence.  By sending SIGKILL to the entire process **group**
+        (created via ``os.setsid`` in :meth:`_spawn_process`) we guarantee
+        a clean slate.
         """
         if self._process is not None:
             try:
-                if self._process.isalive():
-                    self._process.terminate(force=True)
+                pid = self._process.pid
+                if pid and self._process.isalive():
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGKILL)
+                        log.debug(
+                            "Killed process group for session %s (pid %d)",
+                            self.session_id,
+                            pid,
+                        )
+                    except (ProcessLookupError, PermissionError):
+                        # Race: process already exited — fall back.
+                        self._process.terminate(force=True)
             except Exception:
                 log.warning(
                     "Error killing session %s process",
@@ -352,6 +373,19 @@ class StataSession:
                 )
             self._process = None
         self._started = False
+
+    def send_interrupt(self) -> bool:
+        """Send SIGINT (Ctrl-C) to the running Stata process.
+
+        Returns ``True`` if the signal was sent, ``False`` if the process
+        is not alive.  This is a *gentle* cancellation — Stata will abort
+        the current command but the session stays usable.
+        """
+        if self._process is not None and self._process.isalive():
+            self._process.sendintr()
+            log.info("Sent interrupt to session %s", self.session_id)
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Auto-restart
@@ -424,16 +458,37 @@ class StataSession:
                 )
             except pexpect.TIMEOUT:
                 elapsed = time.monotonic() - start_time
+                # Capture whatever partial output Stata produced before
+                # the timeout — this often contains useful progress info.
+                partial = ""
+                try:
+                    if self._process is not None and self._process.before:
+                        partial = strip_smcl(self._process.before).strip()
+                except Exception:
+                    pass
+
                 # After a timeout the pexpect buffer is in an unknown
                 # state (partial output, Stata may still be running the
                 # timed-out command).  Kill the process so _ensure_alive()
                 # spawns a clean one on the next call.
                 self._kill_process()
+
+                hint = (
+                    f"Command timed out after {timeout}s. "
+                    "The session has been reset and will auto-restart on "
+                    "the next command.  Tips:\n"
+                    "  • Increase the timeout parameter.\n"
+                    "  • For long-running commands (bootstrap, mixed models) "
+                    "use the run_do_file tool which runs in batch mode.\n"
+                    "  • Use stata_cancel_command to abort a running command "
+                    "without losing the session."
+                )
+                output_text = f"{hint}\n\n--- partial output ---\n{partial}" if partial else hint
+
                 return ExecutionResult(
-                    output="",
+                    output=output_text,
                     return_code=1,
-                    error_message=f"Command timed out after {timeout}s. "
-                    "Session will auto-restart on next command.",
+                    error_message=hint,
                     error_code=None,
                     graphs=[],
                     execution_time=elapsed,

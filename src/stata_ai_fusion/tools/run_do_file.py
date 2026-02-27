@@ -1,21 +1,31 @@
-"""Run .do file tool.
+"""Run .do file tool — batch-mode implementation.
 
 Provides the ``stata_run_do_file`` MCP tool that executes an existing Stata
-do-file in a managed session, returning text output and any generated graphs.
+do-file in **batch mode** (``subprocess.Popen``) rather than through the
+interactive pexpect session.  Batch mode is more reliable for long-running
+scripts (bootstrap, mixed models, simulations) because it avoids the
+prompt-matching heuristics of pexpect.
+
+Text output is read from the ``.log`` file Stata produces; graphs are
+detected via the :class:`GraphCache` snapshot-diff mechanism.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
+import os
+import signal
+import subprocess
+import time
+import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+import anyio
 from mcp.types import ImageContent, TextContent, Tool
 
-if TYPE_CHECKING:
-    from mcp.server import Server
-
-    from ..stata_session import SessionManager
+from ..graph_cache import GraphCache
+from ..stata_session import _detect_error, strip_smcl
 
 log = logging.getLogger(__name__)
 
@@ -49,28 +59,30 @@ TOOL_DEF = Tool(
     },
 )
 
+# Maximum characters of Stata log output to return to the AI.
+_MAX_OUTPUT_CHARS = 30_000
 
-def register(server: Server, session_manager: SessionManager) -> None:
-    """Register the ``stata_run_do_file`` tool with the MCP server."""
-    # Registration is handled by the central dispatcher in tools/__init__.py.
-    pass
+
+def register(server, session_manager) -> None:  # noqa: ANN001
+    """Registration is handled by the central dispatcher in tools/__init__.py."""
 
 
 async def handle(
-    session_manager: SessionManager,
+    session_manager,  # noqa: ANN001
     arguments: dict,
 ) -> list[TextContent | ImageContent]:
-    """Execute a Stata .do file and return content blocks."""
+    """Execute a Stata .do file in batch mode and return content blocks."""
     raw_path: str = arguments.get("path", "")
     session_id: str = arguments.get("session_id", "default")
     timeout: int = arguments.get("timeout", 300)
+
+    # ---- Input validation ------------------------------------------------
 
     if not raw_path.strip():
         return [TextContent(type="text", text="Error: no file path provided.")]
 
     do_path = Path(raw_path).expanduser().resolve()
 
-    # Validate extension
     if do_path.suffix.lower() != ".do":
         return [
             TextContent(
@@ -79,7 +91,6 @@ async def handle(
             )
         ]
 
-    # Validate existence
     if not do_path.is_file():
         return [
             TextContent(
@@ -88,32 +99,111 @@ async def handle(
             )
         ]
 
-    try:
-        session = await session_manager.get_or_create(session_id)
-    except Exception as exc:
-        log.error("Failed to get/create session %s: %s", session_id, exc)
-        return [TextContent(type="text", text=f"Error creating session: {exc}")]
+    # ---- Resolve Stata path ---------------------------------------------
 
-    code = f'do "{do_path}"'
+    stata_path = str(session_manager.installation.path)
+
+    # ---- Prepare working directory & graph cache -------------------------
+
+    working_directory = do_path.parent
+    graph_cache = GraphCache(working_directory)
+    graph_cache.take_snapshot()
+
+    # The .log file Stata creates has the same stem as the .do file.
+    log_file = working_directory / f"{do_path.stem}.log"
+
+    # ---- Run in batch mode -----------------------------------------------
+
+    start_time = time.monotonic()
+    proc: subprocess.Popen | None = None
+
     try:
-        result = await session.execute(code, timeout=timeout)
+        def _run_batch() -> tuple[int, str]:
+            nonlocal proc
+            proc = subprocess.Popen(
+                [stata_path, "-b", "do", str(do_path)],
+                cwd=str(working_directory),
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Kill the entire process group.
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    proc.kill()
+                proc.wait()
+                raise
+            return proc.returncode, ""
+
+        await anyio.to_thread.run_sync(_run_batch)
+
+    except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - start_time
+        # Try to read partial log output even after timeout.
+        partial = ""
+        if log_file.exists():
+            try:
+                partial = log_file.read_text(encoding="utf-8", errors="replace")
+                partial = strip_smcl(partial)
+                if len(partial) > _MAX_OUTPUT_CHARS:
+                    partial = partial[:_MAX_OUTPUT_CHARS] + "\n\n... (truncated)"
+            except Exception:
+                pass
+        msg = f"Do-file timed out after {timeout}s."
+        output = f"{msg}\n\n--- partial output ---\n{partial}" if partial else msg
+        return [TextContent(type="text", text=output)]
+
     except Exception as exc:
-        log.error("Execution error running %s: %s", do_path, exc)
+        log.error("Batch execution error for %s: %s", do_path, exc)
         return [TextContent(type="text", text=f"Execution error: {exc}")]
+
+    elapsed = time.monotonic() - start_time
+
+    # ---- Read log file ---------------------------------------------------
+
+    raw_output = ""
+    if log_file.exists():
+        try:
+            raw_output = log_file.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            log.warning("Could not read log file %s: %s", log_file, exc)
+
+    cleaned = strip_smcl(raw_output)
+
+    # Truncate very large output.
+    if len(cleaned) > _MAX_OUTPUT_CHARS:
+        cleaned = cleaned[:_MAX_OUTPUT_CHARS] + "\n\n... (output truncated at 30,000 chars)"
+
+    # ---- Error detection -------------------------------------------------
+
+    error_message, error_code = _detect_error(cleaned)
+
+    # ---- Graph detection -------------------------------------------------
+
+    graphs = graph_cache.detect_changes()
+
+    # ---- Build response --------------------------------------------------
 
     contents: list[TextContent | ImageContent] = []
 
-    # Text output
-    output_text = result.output or ""
-    if result.error_message:
-        output_text += f"\n\n--- Stata Error ---\n{result.error_message}"
-        if result.error_code is not None:
-            output_text += f" [r({result.error_code})]"
+    # Metadata header
+    meta_line = f"[batch mode | {elapsed:.1f}s | session_id={session_id}]"
+    output_text = f"{meta_line}\n\n{cleaned}" if cleaned.strip() else meta_line
+
+    if error_message:
+        output_text += f"\n\n--- Stata Error ---\n{error_message}"
+        if error_code is not None:
+            output_text += f" [r({error_code})]"
+
     if output_text.strip():
         contents.append(TextContent(type="text", text=output_text.strip()))
 
     # Graph images
-    for graph in result.graphs:
+    for graph in graphs:
         mime = f"image/{graph.format}" if graph.format != "pdf" else "application/pdf"
         contents.append(
             ImageContent(
