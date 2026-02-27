@@ -1,6 +1,6 @@
 [project]
 name = "stata-ai-fusion"
-version = "0.2.0"
+version = "0.2.1"
 description = "MCP Server + Skill for Stata: execute commands, inspect data, and generate high-quality Stata code with AI"
 readme = "README.md"
 license = { text = "MIT" }
