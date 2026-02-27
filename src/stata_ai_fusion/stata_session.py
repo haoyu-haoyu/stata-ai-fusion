@@ -961,10 +961,25 @@ class SessionManager:
             session: StataSession | BatchSession
             if self._use_batch:
                 session = BatchSession(self.installation, session_id=session_id)
+                await session.start()
             else:
                 session = StataSession(self.installation, session_id=session_id)
+                try:
+                    await session.start()
+                except PermissionError:
+                    # macOS may deny PTY creation if the host app lacks
+                    # "Developer Tools" entitlements.  Fall back to batch
+                    # mode so the MCP server stays functional.
+                    log.warning(
+                        "Interactive session failed (PermissionError); "
+                        "falling back to batch mode for session %s",
+                        session_id,
+                    )
+                    _cleanup_temp_dir(session._tmpdir)
+                    session = BatchSession(self.installation, session_id=session_id)
+                    await session.start()
+                    self._use_batch = True  # avoid retrying pexpect
 
-            await session.start()
             self._sessions[session_id] = session
             self._last_activity[session_id] = time.monotonic()
             return session
