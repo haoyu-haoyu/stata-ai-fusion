@@ -31,7 +31,7 @@ The project ships as three complementary components so every workflow is covered
 
 | Component | What it does | Who it's for |
 |-----------|-------------|--------------|
-| **MCP Server** | 10 tools that let any MCP-compatible AI execute Stata | Claude Desktop, Claude Code, Cursor users |
+| **MCP Server** | 11 tools that let any MCP-compatible AI execute Stata | Claude Desktop, Claude Code, Cursor users |
 | **Skill Knowledge Base** | 5,653 lines of Stata expertise the AI can consult | Claude.ai Project / Skill users |
 | **VS Code Extension** | Syntax highlighting, snippets, run-in-terminal | Anyone writing `.do` files in VS Code or Cursor |
 
@@ -109,7 +109,7 @@ Create `.cursor/mcp.json` or `.vscode/mcp.json` in your project root:
 
 This mode provides code-generation guidance only (no live Stata execution).
 
-1. Download `stata-ai-fusion-skill.zip` from the [Releases](https://github.com/SexyERIC0723/stata-ai-fusion/releases) page.
+1. Download `stata-ai-fusion-skill.zip` from the [Releases](https://github.com/haoyu-haoyu/stata-ai-fusion/releases) page.
 2. Go to **Claude.ai > Project > Project Knowledge > Upload**.
 3. Upload the zip file.
 
@@ -122,19 +122,19 @@ The AI will now reference the 5,653-line knowledge base when writing Stata code 
 # Search "Stata AI Fusion" in the Extensions panel
 
 # Option 2: From GitHub Release
-code --install-extension stata-ai-fusion-0.1.2.vsix
+code --install-extension stata-ai-fusion-0.2.1.vsix
 
 # Option 3: Cursor
-cursor --install-extension stata-ai-fusion-0.1.2.vsix
+cursor --install-extension stata-ai-fusion-0.2.1.vsix
 ```
 
 ---
 
 ## Features
 
-### MCP Server -- 10 tools for AI-driven analysis
+### MCP Server -- 11 tools for AI-driven analysis
 
-The server exposes 10 MCP tools. Each tool can be called by any MCP-compatible AI assistant.
+The server exposes 11 MCP tools. Each tool can be called by any MCP-compatible AI assistant.
 
 #### Conversation Example
 
@@ -177,14 +177,15 @@ The knowledge base uses a **Progressive Disclosure** architecture:
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `run_command` | Execute Stata code and return output | `run_command(code="regress price mpg weight, robust")` |
-| `run_do_file` | Run an entire `.do` file | `run_do_file(path="/path/to/analysis.do")` |
+| `run_command` | Execute short ad-hoc Stata commands interactively | `run_command(code="regress price mpg weight, robust")` |
+| `run_do_file` | Run a `.do` file in batch mode (reliable for long scripts) | `run_do_file(path="/path/to/analysis.do")` |
 | `inspect_data` | Describe the current dataset in memory | Returns obs count, variable names, types, labels |
 | `codebook` | Generate codebook for specific variables | `codebook(variables="price mpg foreign")` |
 | `get_results` | Extract stored results (r/e/c class) | `get_results(result_class="e", keys="N r2")` |
 | `export_graph` | Export current graph as PNG/SVG/PDF | Returns base64-encoded image data |
 | `search_log` | Search through the Stata session log | `search_log(query="error", regex=true)` |
 | `install_package` | Install SSC or user-written packages | `install_package(package="reghdfe")` |
+| `cancel_command` | Send interrupt (SIGINT) to cancel a running command | `cancel_command(session_id="default")` |
 | `list_sessions` | List all active Stata sessions | Returns session IDs, types, alive status |
 | `close_session` | Close a specific Stata session | `close_session(session_id="default")` |
 
@@ -250,6 +251,7 @@ The server supports multiple concurrent Stata sessions with complete data isolat
 - Each session maintains its own dataset, variables, and estimation results.
 - Sessions persist between tool calls -- no need to reload data after every command.
 - A default session is created automatically; create named sessions for parallel workflows.
+- Idle sessions are automatically cleaned up after 1 hour (configurable).
 - All sessions are cleaned up gracefully on server shutdown.
 
 ```
@@ -264,7 +266,7 @@ AI calls: run_command(code="sysuse nlsw88, clear", session_id="session_B")
 
 ```bash
 # Clone and set up
-git clone https://github.com/SexyERIC0723/stata-ai-fusion.git
+git clone https://github.com/haoyu-haoyu/stata-ai-fusion.git
 cd stata-ai-fusion
 uv sync
 
@@ -306,7 +308,7 @@ stata-ai-fusion/
 │   ├── stata_session.py     # Interactive & batch session manager
 │   ├── graph_cache.py       # Graph capture and base64 encoding
 │   ├── result_extractor.py  # r()/e()/c() result extraction
-│   └── tools/               # 10 MCP tool implementations
+│   └── tools/               # 11 MCP tool implementations
 ├── skill/
 │   ├── SKILL.md             # Main skill routing document (486 lines)
 │   └── references/          # 14 reference documents (5,167 lines)
@@ -348,6 +350,6 @@ MIT -- see [LICENSE](LICENSE) for details.
 <p align="center">
   <a href="https://pypi.org/project/stata-ai-fusion/">PyPI</a> &bull;
   <a href="https://marketplace.visualstudio.com/items?itemName=statafusion.stata-ai-fusion">VS Code Marketplace</a> &bull;
-  <a href="https://github.com/SexyERIC0723/stata-ai-fusion/releases">Releases</a> &bull;
+  <a href="https://github.com/haoyu-haoyu/stata-ai-fusion/releases">Releases</a> &bull;
   <a href="README_CN.md">中文文档</a>
 </p>
