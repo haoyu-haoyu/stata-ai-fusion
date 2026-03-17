@@ -20,9 +20,17 @@ Detect which execution mode is available and adapt accordingly.
 
 ### MCP Mode (Stata MCP Server Available)
 When the MCP server is connected, you can execute Stata code directly:
-- Use `stata_execute` to run code and return results
-- Use `stata_do_file` to run full .do files
-- Use `stata_load_data` to load .dta files
+- Use `stata_run_command` to run code and return results
+- Use `stata_run_do_file` to run full .do files
+- Use `stata_inspect_data` to inspect loaded datasets (summary stats, variable info)
+- Use `stata_codebook` to generate a codebook for the current dataset
+- Use `stata_get_results` to retrieve stored estimation results (`r()`, `e()`, `s()`)
+- Use `stata_export_graph` to export the current Stata graph to an image
+- Use `stata_search_log` to search through Stata log output
+- Use `stata_install_package` to install community-contributed packages
+- Use `stata_cancel_command` to cancel a running Stata command
+- Use `stata_list_sessions` to list all active Stata sessions
+- Use `stata_close_session` to close a specific Stata session
 - Always check execution results before proceeding
 - If execution fails, read `references/error-codes.md` for diagnosis
 
@@ -319,11 +327,11 @@ Read only the files relevant to the user's task. Paths are relative to this SKIL
 
 **Pattern A: Iterative Analysis**
 ```
-1. stata_load_data("mydata.dta")         -> inspect data
-2. stata_execute("describe")             -> understand structure
-3. stata_execute("regress y x1 x2")     -> run model
+1. stata_run_command("use mydata.dta, clear")  -> load data
+2. stata_run_command("describe")               -> understand structure
+3. stata_run_command("regress y x1 x2")        -> run model
 4. Read results, decide next step
-5. stata_execute("esttab using ...")     -> export table
+5. stata_run_command("esttab using ...")        -> export table
 ```
 
 **Pattern B: Debug Workflow**
@@ -331,18 +339,18 @@ Read only the files relevant to the user's task. Paths are relative to this SKIL
 1. User pastes error from .log file
 2. Read references/error-codes.md for the error code
 3. Identify the root cause
-4. stata_execute(corrected_code)         -> verify fix
+4. stata_run_command(corrected_code)      -> verify fix
 5. Explain what went wrong
 ```
 
 **Pattern C: Full Pipeline**
 ```
-1. stata_execute("import delimited ...")  -> load raw data
-2. stata_execute("describe \n codebook")  -> inspect
+1. stata_run_command("import delimited ...")  -> load raw data
+2. stata_run_command("describe \n codebook")  -> inspect
 3. Generate cleaning code based on inspection
-4. stata_execute(cleaning_code)           -> clean
-5. stata_execute(analysis_code)           -> analyze
-6. stata_execute(export_code)             -> export results
+4. stata_run_command(cleaning_code)           -> clean
+5. stata_run_command(analysis_code)           -> analyze
+6. stata_run_command(export_code)             -> export results
 ```
 
 ### Error Recovery in MCP Mode

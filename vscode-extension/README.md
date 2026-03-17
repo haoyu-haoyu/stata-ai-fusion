@@ -8,7 +8,7 @@ experience in VS Code.
 
 ## Features
 
-- **MCP Server**: 10 tools that let AI agents operate Stata directly
+- **MCP Server**: 11 tools that let AI agents operate Stata directly
   - `run_command` / `run_do_file` -- execute code
   - `inspect_data` / `codebook` -- data exploration
   - `get_results` -- extract r()/e()/c() results
@@ -49,13 +49,13 @@ Or configure in your AI assistant's MCP settings:
 ### VS Code Extension
 
 ```bash
-code --install-extension stata-ai-fusion-0.1.0.vsix
+code --install-extension stata-ai-fusion-0.2.2.vsix
 ```
 
 ### Skill Only (Claude.ai)
 
 Download `stata-ai-fusion-skill.zip` from the
-[Releases](https://github.com/SexyERIC0723/stata-ai-fusion/releases) page,
+[Releases](https://github.com/haoyu-haoyu/stata-ai-fusion/releases) page,
 then upload via Claude.ai Settings > Skills.
 
 ## Requirements
@@ -73,7 +73,7 @@ then upload via Claude.ai Settings > Skills.
 ## Development
 
 ```bash
-git clone https://github.com/SexyERIC0723/stata-ai-fusion.git
+git clone https://github.com/haoyu-haoyu/stata-ai-fusion.git
 cd stata-ai-fusion
 uv sync
 uv run pytest tests/ -v

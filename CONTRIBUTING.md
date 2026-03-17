@@ -6,25 +6,23 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-org/stata-ai-fusion.git
+   git clone https://github.com/haoyu-haoyu/stata-ai-fusion.git
    cd stata-ai-fusion
    ```
 
-2. Create a virtual environment and install dependencies:
+2. Install dependencies:
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -e ".[dev]"
+   uv sync
    ```
 
 3. Run the tests:
    ```bash
-   pytest
+   uv run pytest
    ```
 
 4. Run the linter:
    ```bash
-   ruff check .
+   uv run ruff check .
    ```
 
 ## Code Style

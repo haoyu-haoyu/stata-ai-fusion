@@ -20,7 +20,7 @@
 ### Numeric Storage Types
 | Type | Bytes | Range | Use Case |
 |------|-------|-------|----------|
-| `byte` | 1 | -127 to 100 | Small integers, indicators |
+| `byte` | 1 | -127 to 100 (101-127 reserved for extended missing values) | Small integers, indicators |
 | `int` | 2 | -32,767 to 32,740 | Medium integers |
 | `long` | 4 | -2.1 billion to 2.1 billion | Large integers, IDs |
 | `float` | 4 | +/-1.7e38 | Default; 7 digits precision |

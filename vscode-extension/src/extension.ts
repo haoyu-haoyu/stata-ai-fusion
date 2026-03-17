@@ -11,6 +11,11 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 export function activate(context: vscode.ExtensionContext): void {
     outputChannel = new StataOutputChannel();
     mcpBridge = new McpBridge(outputChannel);
+
+    const timeoutConfig = vscode.workspace.getConfiguration('stataFusion');
+    const timeout = timeoutConfig.get<number>('requestTimeout', 120000);
+    mcpBridge.setTimeout(timeout);
+
     statusBarItem = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Left,
         100
@@ -105,6 +110,15 @@ export function activate(context: vscode.ExtensionContext): void {
             );
         });
     }
+
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration('stataFusion.requestTimeout') && mcpBridge) {
+                const updated = vscode.workspace.getConfiguration('stataFusion');
+                mcpBridge.setTimeout(updated.get<number>('requestTimeout', 120000));
+            }
+        })
+    );
 
     outputChannel.appendLine('[Stata AI Fusion] Extension activated.');
 }

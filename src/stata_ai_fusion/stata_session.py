@@ -99,7 +99,9 @@ def strip_smcl(text: str) -> str:
     text = _SMCL_CHAR_RE.sub(_replace_char, text)
     # Strip all remaining SMCL tags — loop to handle nested tags.
     prev = None
-    while prev != text:
+    for _ in range(50):
+        if prev == text:
+            break
         prev = text
         text = _SMCL_TAG_RE.sub("", text)
     return text
@@ -147,7 +149,8 @@ def _detect_error(output: str) -> tuple[str | None, int | None]:
                 break
             if stripped:
                 error_msg_parts.append(stripped)
-        error_msg = error_msg_parts[-1] if error_msg_parts else f"Stata error r({code})"
+        tail = error_msg_parts[-3:] if len(error_msg_parts) > 3 else error_msg_parts
+        error_msg = "\n".join(tail) if tail else f"Stata error r({code})"
         return error_msg, code
 
     # Check for other error patterns (no numeric code).
