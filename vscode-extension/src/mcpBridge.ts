@@ -131,7 +131,7 @@ export class McpBridge {
                     capabilities: {},
                     clientInfo: {
                         name: 'stata-ai-fusion-vscode',
-                        version: '0.2.2',
+                        version: '0.2.3',
                     },
                 });
 

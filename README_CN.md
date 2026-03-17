@@ -121,10 +121,10 @@ AI 将在编写 Stata 代码时参考这个 5,653 行的知识库。
 # 方法 1: 在 VS Code 扩展面板搜索 "Stata AI Fusion"
 
 # 方法 2: 从 GitHub Release 下载
-code --install-extension stata-ai-fusion-0.2.2.vsix
+code --install-extension stata-ai-fusion-0.2.3.vsix
 
 # 方法 3: Cursor
-cursor --install-extension stata-ai-fusion-0.2.2.vsix
+cursor --install-extension stata-ai-fusion-0.2.3.vsix
 ```
 
 ---

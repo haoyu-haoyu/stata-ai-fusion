@@ -122,10 +122,10 @@ The AI will now reference the 5,653-line knowledge base when writing Stata code 
 # Search "Stata AI Fusion" in the Extensions panel
 
 # Option 2: From GitHub Release
-code --install-extension stata-ai-fusion-0.2.2.vsix
+code --install-extension stata-ai-fusion-0.2.3.vsix
 
 # Option 3: Cursor
-cursor --install-extension stata-ai-fusion-0.2.2.vsix
+cursor --install-extension stata-ai-fusion-0.2.3.vsix
 ```
 
 ---

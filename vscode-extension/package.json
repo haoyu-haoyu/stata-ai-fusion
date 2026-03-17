@@ -2,7 +2,7 @@
   "name": "stata-ai-fusion",
   "displayName": "Stata AI Fusion",
   "description": "Run Stata code, view graphs, and get AI assistance — all in VS Code",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "statafusion",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Data Science", "Machine Learning"],

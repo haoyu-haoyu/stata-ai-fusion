@@ -49,7 +49,7 @@ Or configure in your AI assistant's MCP settings:
 ### VS Code Extension
 
 ```bash
-code --install-extension stata-ai-fusion-0.2.2.vsix
+code --install-extension stata-ai-fusion-0.2.3.vsix
 ```
 
 ### Skill Only (Claude.ai)
