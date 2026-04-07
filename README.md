@@ -262,6 +262,193 @@ AI calls: run_command(code="sysuse nlsw88, clear", session_id="session_B")
 
 ---
 
+## Troubleshooting
+
+<details>
+<summary><strong>Stata not found / auto-discovery fails</strong></summary>
+
+The server searches for Stata in three places (see [Stata Auto-Discovery](#stata-auto-discovery)). If none work, you'll see:
+
+```
+StataNotFoundError: No Stata installation found
+```
+
+**Fix it:**
+
+1. Find your Stata executable manually:
+   ```bash
+   # macOS
+   find /Applications -name "stata-mp" -o -name "stata-se" -o -name "stata" 2>/dev/null
+
+   # Linux
+   which stata-mp || which stata-se || which stata
+
+   # Windows (PowerShell)
+   Get-ChildItem "C:\Program Files\Stata*" -Recurse -Filter "Stata*.exe" | Select-Object FullName
+   ```
+
+2. Set the path explicitly:
+   ```bash
+   # macOS / Linux
+   export STATA_PATH="/Applications/Stata/StataMP.app/Contents/MacOS/stata-mp"
+
+   # Windows (PowerShell)
+   $env:STATA_PATH = "C:\Program Files\Stata18\StataMP-64.exe"
+   ```
+
+3. For Claude Code, add it to your MCP config:
+   ```json
+   {
+     "env": {
+       "STATA_PATH": "/path/to/your/stata"
+     }
+   }
+   ```
+
+**Common pitfalls:**
+- On macOS, point to the binary *inside* the `.app` bundle, not the `.app` itself
+- On Windows, use the full path including `-64` suffix for 64-bit editions
+- StataNow uses different binary names — check `Contents/MacOS/` for the exact name
+
+</details>
+
+<details>
+<summary><strong>pexpect installation or "spawn" errors</strong></summary>
+
+`pexpect` is the library that drives Stata's interactive console. Issues appear as:
+
+```
+ModuleNotFoundError: No module named 'pexpect'
+# or
+pexpect.exceptions.ExceptionPexpect: The command was not found ...
+```
+
+**Fix it:**
+
+```bash
+# If using uv (recommended)
+uv pip install pexpect
+
+# If using pip
+pip install pexpect
+```
+
+**Windows users:** `pexpect` has limited Windows support. The server uses `pexpect.popen_spawn` on Windows, which works but has some limitations:
+- No pseudo-terminal (PTY), so some Stata output formatting may differ
+- `more` pagination must be disabled (the server handles this automatically)
+- If you encounter issues, try running from WSL2 instead
+
+</details>
+
+<details>
+<summary><strong>MCP server won't start or connect</strong></summary>
+
+**Symptom:** Claude Code or Cursor shows "MCP server failed to start" or the Stata tools don't appear.
+
+**Step 1 — Test the server standalone:**
+```bash
+# Should print tool list and wait for input
+uv run stata-ai-fusion
+```
+
+If this fails, check the error message:
+- `StataNotFoundError` → see [Stata not found](#stata-not-found--auto-discovery-fails) above
+- `ModuleNotFoundError` → install missing dependency: `uv pip install stata-ai-fusion`
+- `Address already in use` → another instance is running; kill it first
+
+**Step 2 — Check your MCP configuration:**
+
+For Claude Code (`~/.claude/settings.json` or project `.claude/settings.json`):
+```json
+{
+  "mcpServers": {
+    "stata-ai-fusion": {
+      "command": "uvx",
+      "args": ["stata-ai-fusion"]
+    }
+  }
+}
+```
+
+For Cursor (`.cursor/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "stata-ai-fusion": {
+      "command": "uvx",
+      "args": ["stata-ai-fusion"]
+    }
+  }
+}
+```
+
+**Step 3 — Enable debug logging:**
+```bash
+export MCP_STATA_LOGLEVEL=DEBUG
+uv run stata-ai-fusion
+```
+This shows every Stata interaction, including discovery, session creation, and command execution.
+
+</details>
+
+<details>
+<summary><strong>Windows-specific issues</strong></summary>
+
+**Path separators:**
+Always use forward slashes or raw strings in `STATA_PATH`:
+```powershell
+# PowerShell
+$env:STATA_PATH = "C:/Program Files/Stata18/StataMP-64.exe"
+# or
+$env:STATA_PATH = "C:\Program Files\Stata18\StataMP-64.exe"
+```
+
+**Stata edition detection on Windows:**
+The server checks the Windows registry under `HKEY_LOCAL_MACHINE\SOFTWARE\StataCorpLP` and `HKEY_CURRENT_USER\SOFTWARE\StataCorpLP` for installed editions. If your registry entries are non-standard (e.g., portable install), set `STATA_PATH` manually.
+
+**Long path issues:**
+If your project path exceeds 260 characters, enable long path support:
+```powershell
+# Run as Administrator
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+  -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+```
+
+**Antivirus interference:**
+Some antivirus software blocks `pexpect` from spawning Stata. Add your Stata directory and Python environment to the exclusion list if the server hangs on "Creating session."
+
+</details>
+
+<details>
+<summary><strong>Session timeout / "No active session" errors</strong></summary>
+
+**Why it happens:** Idle sessions are automatically cleaned up after **1 hour** to free system resources. If your AI conversation pauses for a long time and then resumes, the session may have been closed.
+
+**Fix it:**
+- Simply run another command — the server auto-creates a new default session
+- If you need a specific named session: ask the AI to call `create_session`
+- For long-running batch jobs, use `run_do_file` with `batch_mode=true` (designed for extended execution)
+
+**Tip:** You can check active sessions at any time by asking the AI to call `list_sessions`.
+
+</details>
+
+<details>
+<summary><strong>Output seems truncated</strong></summary>
+
+By design, the server truncates very large outputs to stay within AI context window limits:
+- **Head:** first 3,000 characters
+- **Tail:** last 5,000 characters
+- **Inline graphs:** up to 5 per `run_command`, 3 per `run_do_file`
+
+For large outputs, use `run_do_file` with `batch_mode=true` — this captures all output to a log file and returns a summary instead of the full text.
+
+For graphs, use `export_graph` to save specific graphs to files at full resolution rather than relying on inline preview.
+
+</details>
+
+---
+
 ## Development
 
 ```bash
