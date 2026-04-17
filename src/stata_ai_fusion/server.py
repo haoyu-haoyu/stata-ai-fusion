@@ -32,31 +32,91 @@ SKILL_DIR = Path(__file__).parent.parent.parent / "skill"
 
 
 def _read_skill_main() -> str:
-    """Read the SKILL.md knowledge base document."""
+    """Read the SKILL.md knowledge base document.
+
+    Returns the file's contents on success.  If the file is missing,
+    logs a WARNING (so operators see the packaging/config problem in
+    their server log) and returns a user-visible placeholder that keeps
+    the MCP resource-read contract.
+    """
     skill_path = SKILL_DIR / "SKILL.md"
     if skill_path.is_file():
-        return skill_path.read_text(encoding="utf-8")
+        try:
+            return skill_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("Failed to read %s: %s", skill_path, exc)
+            return f"(SKILL.md unreadable: {exc.strerror or exc})"
+    log.warning(
+        "SKILL.md not found at %s — knowledge base resource will be empty. "
+        "Check that the 'skill/' directory is present in your installation.",
+        skill_path,
+    )
     return "(SKILL.md not found)"
 
 
 def _list_reference_files() -> list[Path]:
-    """List all reference markdown files in skill/references/."""
+    """List all reference markdown files in ``skill/references/``.
+
+    If the references directory is missing or unreadable, logs a
+    WARNING and returns an empty list so the MCP server still starts
+    cleanly.
+    """
     refs_dir = SKILL_DIR / "references"
     if not refs_dir.is_dir():
+        log.warning(
+            "Reference directory missing: %s — no reference topics will be advertised. "
+            "Check that the 'skill/references/' directory is present in your installation.",
+            refs_dir,
+        )
         return []
-    return sorted(refs_dir.glob("*.md"))
+    try:
+        return sorted(refs_dir.glob("*.md"))
+    except OSError as exc:
+        log.warning("Failed to scan reference directory %s: %s", refs_dir, exc)
+        return []
 
 
 def _read_reference(topic: str) -> str | None:
-    """Read a single reference document by topic slug."""
+    """Read a single reference document by topic slug.
+
+    Returns the document's text on success, or ``None`` if no matching
+    file exists (case-insensitive).  A missing references directory
+    surfaces as a WARNING (emitted by :func:`_list_reference_files`)
+    so both the list and single-topic access paths expose the same
+    operator-visible signal for that root cause.
+
+    The exact-path read is attempted *before* listing so that a
+    directory with execute-only permissions (listable=False but
+    openable by known name) still succeeds for the happy path.
+    """
     refs_dir = SKILL_DIR / "references"
+
+    # Fast path: try the exact filename first.  This succeeds even on
+    # directories that block ``glob()`` / ``readdir()`` but allow
+    # ``open()`` of a known path (rare but real: POSIX execute-only).
     candidate = refs_dir / f"{topic}.md"
     if candidate.is_file():
-        return candidate.read_text(encoding="utf-8")
-    # Try case-insensitive match
-    for p in refs_dir.glob("*.md"):
-        if p.stem.lower() == topic.lower():
-            return p.read_text(encoding="utf-8")
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("Failed to read reference %s: %s", candidate, exc)
+            return None
+
+    # Fall back to listing for the case-insensitive match.  Calling
+    # :func:`_list_reference_files` is also what surfaces a missing /
+    # unreadable references directory to operators.
+    ref_files = _list_reference_files()
+
+    topic_lower = topic.lower()
+    for p in ref_files:
+        if p.stem.lower() == topic_lower:
+            try:
+                return p.read_text(encoding="utf-8")
+            except OSError as exc:
+                log.warning("Failed to read reference %s: %s", p, exc)
+                return None
+
+    log.debug("Reference topic not found: %s", topic)
     return None
 
 
@@ -122,8 +182,12 @@ def register_resources(server: Server) -> None:
             content = _read_reference(topic)
             if content is not None:
                 return content
+            # _read_reference() already logs at DEBUG for an unknown topic
+            # and at WARNING if the underlying references directory is
+            # missing — don't add a duplicate INFO log here.
             return f"(reference not found: {topic})"
 
+        log.error("Unknown MCP resource URI requested: %s", uri_str)
         return f"(unknown resource: {uri_str})"
 
 
@@ -182,8 +246,12 @@ async def serve() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             signal.signal(sig, _signal_handler)
-        except (OSError, ValueError):
-            pass  # Not all signals available on all platforms
+        except (OSError, ValueError) as exc:
+            # Windows restricts which signals can be set from non-main threads
+            # or in certain execution contexts (e.g. pytest runners).  Log at
+            # DEBUG rather than swallowing silently so the cause is visible
+            # when troubleshooting unexpected shutdown behavior.
+            log.debug("Could not install handler for %s: %s", signal.Signals(sig).name, exc)
 
     # -- Run ---------------------------------------------------------------
     log.info("MCP server ready, waiting for connections via stdio")
