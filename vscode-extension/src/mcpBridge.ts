@@ -137,6 +137,12 @@ export class McpBridge {
 
                 initResult
                     .then(() => {
+                        // Per the MCP lifecycle, the client must send the
+                        // `notifications/initialized` notification after the
+                        // initialize response and before any other request;
+                        // stricter/newer servers reject the first tools/call
+                        // without it.
+                        this.sendNotification('notifications/initialized');
                         this.started = true;
                         this.outputChannel.appendLine(
                             '[MCP Bridge] MCP server initialized.'
@@ -208,6 +214,21 @@ export class McpBridge {
                 }
             });
         });
+    }
+
+    /**
+     * Send a JSON-RPC notification (no `id`, no response expected).
+     */
+    private sendNotification(
+        method: string,
+        params?: Record<string, unknown>
+    ): void {
+        if (!this.process?.stdin?.writable) {
+            return;
+        }
+        const message =
+            JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n';
+        this.process.stdin.write(message);
     }
 
     /**
@@ -297,14 +318,14 @@ export class McpBridge {
      * Run a Stata command string.
      */
     async runCommand(code: string): Promise<McpToolResult> {
-        return this.callTool('run_command', { code });
+        return this.callTool('stata_run_command', { code });
     }
 
     /**
      * Run a Stata .do file by path.
      */
     async runDoFile(filePath: string): Promise<McpToolResult> {
-        return this.callTool('run_do_file', { file_path: filePath });
+        return this.callTool('stata_run_do_file', { path: filePath });
     }
 
     /**

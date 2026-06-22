@@ -138,16 +138,51 @@ export async function autoConfigureMcp(): Promise<void> {
         args: ['--from', 'stata-ai-fusion', 'stata-ai-fusion'],
     };
 
-    // Read existing config or start fresh
+    // Read existing config, or start fresh if the file does not exist.
+    //
+    // IMPORTANT: if the file exists but cannot be read/parsed (e.g. it contains
+    // JSONC comments, which VS Code's mcp.json allows, or was hand-edited), we
+    // must NOT fall back to an empty object and rewrite it — that would delete
+    // every other MCP server the user has configured.  Skip auto-config
+    // instead and leave the file untouched.
     let config: McpConfig = {};
-    try {
-        if (fs.existsSync(configPath)) {
-            const content = fs.readFileSync(configPath, 'utf-8');
-            config = JSON.parse(content) as McpConfig;
+    if (fs.existsSync(configPath)) {
+        let content: string;
+        try {
+            content = fs.readFileSync(configPath, 'utf-8');
+        } catch (err) {
+            console.warn(
+                `[stata-ai-fusion] Could not read ${configPath}; ` +
+                    'skipping MCP auto-config.',
+                err
+            );
+            return;
         }
-    } catch {
-        // If the file is corrupt or unreadable, start with empty config
-        config = {};
+        try {
+            config = JSON.parse(content) as McpConfig;
+        } catch (err) {
+            console.warn(
+                `[stata-ai-fusion] ${configPath} is not strict JSON ` +
+                    '(comments?); skipping MCP auto-config to avoid overwriting ' +
+                    'your other MCP servers. Add the "stata-ai-fusion" entry ' +
+                    'manually if needed.',
+                err
+            );
+            return;
+        }
+        // Guard against a structurally-unexpected file (null/array/primitive):
+        // don't risk overwriting it.
+        if (
+            typeof config !== 'object' ||
+            config === null ||
+            Array.isArray(config)
+        ) {
+            console.warn(
+                `[stata-ai-fusion] ${configPath} is not a JSON object; ` +
+                    'skipping MCP auto-config to avoid overwriting it.'
+            );
+            return;
+        }
     }
 
     // Initialize mcpServers if missing

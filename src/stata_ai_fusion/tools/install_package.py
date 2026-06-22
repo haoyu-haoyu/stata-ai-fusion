@@ -49,6 +49,24 @@ TOOL_DEF = Tool(
     },
 )
 
+# Marker used to surface `which`'s return code.  `capture` suppresses which's
+# own output (including the "not found" message and r(111)), so the only
+# reliable signal of whether a package exists is `_rc`, which we print and parse.
+_RC_MARKER = "__stata_pkg_rc="
+_RC_RE = re.compile(rf"{re.escape(_RC_MARKER)}(-?\d+)")
+
+
+def _parse_check_rc(output: str | None) -> int | None:
+    """Return the `_rc` from a ``which`` check, or ``None`` if not found.
+
+    A non-zero (e.g. 111) value means the command is not installed; ``0`` means
+    it is available; ``None`` means the marker was missing (treat as unknown).
+    """
+    if not output:
+        return None
+    m = _RC_RE.search(output)
+    return int(m.group(1)) if m else None
+
 
 async def handle(
     session_manager: SessionManager,
@@ -80,25 +98,30 @@ async def handle(
         log.error("Failed to get/create session %s: %s", session_id, exc)
         return [TextContent(type="text", text=f"Error creating session: {exc}")]
 
-    # Step 1: Check if already installed
-    check_code = f"capture which {package}"
+    # Step 1: Check whether the package is already installed.
+    #
+    # `which <pkg>` sets _rc=111 when the command is not found.  `capture`
+    # suppresses which's output, so we print _rc and read it back rather than
+    # scraping the (now-empty) text.  The previous implementation scraped the
+    # suppressed output and concluded EVERY missing package was "already
+    # installed", so it never actually installed anything.
+    check_code = f'capture which {package}\ndisplay "{_RC_MARKER}" _rc'
     try:
         check_result = await session.execute(check_code, timeout=30)
     except Exception as exc:
         log.error("Error checking package %s: %s", package, exc)
         return [TextContent(type="text", text=f"Error checking package: {exc}")]
 
-    # If `which` succeeds without error, the package is already installed
-    if check_result.return_code == 0 and check_result.error_message is None:
-        output = check_result.output or ""
-        # `which` prints the path when found; check it does not contain "not found"
-        if "not found" not in output.lower():
-            return [
-                TextContent(
-                    type="text",
-                    text=f"Package '{package}' is already installed.\n{output.strip()}",
-                )
-            ]
+    check_rc = _parse_check_rc(check_result.output)
+    if check_rc == 0:
+        return [
+            TextContent(
+                type="text",
+                text=f"Package '{package}' is already installed.",
+            )
+        ]
+    # check_rc is non-zero (not installed) or None (marker missing / unknown);
+    # fall through and attempt the install — `, replace` makes it idempotent.
 
     # Step 2: Install the package
     if from_ssc:

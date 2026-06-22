@@ -35,11 +35,6 @@ TOOL_DEF = Tool(
                 "type": "string",
                 "description": "Stata commands to execute (may span multiple lines).",
             },
-            "echo": {
-                "type": "boolean",
-                "description": "Whether to echo commands in output. Default true.",
-                "default": True,
-            },
             "session_id": {
                 "type": "string",
                 "description": "Session identifier. Default 'default'.",
@@ -62,7 +57,6 @@ async def handle(
 ) -> list[TextContent | ImageContent]:
     """Execute Stata commands and return content blocks."""
     code: str = arguments.get("code", "")
-    echo: bool = arguments.get("echo", True)
     session_id: str = arguments.get("session_id", "default")
     timeout: int = max(1, min(int(arguments.get("timeout", 120)), 3600))
 
@@ -74,9 +68,6 @@ async def handle(
     except Exception as exc:
         log.error("Failed to get/create session %s: %s", session_id, exc)
         return [TextContent(type="text", text=f"Error creating session: {exc}")]
-
-    if not echo:
-        code = f"set output inform\n{code}"
 
     try:
         result = await session.execute(code, timeout=timeout)
