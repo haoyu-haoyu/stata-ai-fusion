@@ -1,0 +1,12 @@
+# Files excluded from the packaged .vsix (everything else is included).
+# The TypeScript in src/ is bundled into dist/extension.js by esbuild, so the
+# sources, build config, and dev dependencies do not belong in the package.
+.vscode/**
+node_modules/**
+src/**
+tsconfig.json
+package-lock.json
+*.vsix
+.gitignore
+.vscodeignore
+**/*.map
