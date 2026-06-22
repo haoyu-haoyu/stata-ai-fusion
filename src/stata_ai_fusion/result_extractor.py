@@ -59,6 +59,12 @@ _MATRIX_DIM_RE = re.compile(
     re.MULTILINE,
 )
 
+# A valid stored-result name is a plain Stata identifier.  Names that reach
+# get_scalar/get_matrix/get_macro are interpolated into executed Stata code,
+# so anything else is rejected to prevent command injection (e.g. a crafted
+# key like ``N)\nshell ...`` smuggled in through the get_results `keys` field).
+_RESULT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def _parse_numeric(value: str) -> float | None:
     """Parse a Stata numeric value to a Python float.
@@ -259,6 +265,20 @@ class ResultExtractor:
             raise ValueError(msg)
         return rc
 
+    @staticmethod
+    def _validate_result_name(name: str) -> str:
+        """Validate a stored-result *name* before interpolating it into Stata.
+
+        Stored-result names (scalars/macros/matrices in r()/e()/c()) are plain
+        Stata identifiers.  Rejecting anything else prevents a crafted name from
+        injecting extra Stata/OS commands.
+        """
+        cleaned = name.strip()
+        if not _RESULT_NAME_RE.match(cleaned):
+            msg = f"result name must be a Stata identifier, got {name!r}"
+            raise ValueError(msg)
+        return cleaned
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -288,6 +308,7 @@ class ResultExtractor:
         >>> value = await extractor.get_scalar("mean", "r")
         """
         rc = self._validate_result_class(result_class)
+        name = self._validate_result_name(name)
         code = f"display {rc}({name})"
         output = await self._execute(code)
         if output is None:
@@ -332,6 +353,7 @@ class ResultExtractor:
         >>> coeffs = await extractor.get_matrix("b", "e")
         """
         rc = self._validate_result_class(result_class)
+        name = self._validate_result_name(name)
         code = f"matrix list {rc}({name})"
         output = await self._execute(code)
         if output is None:
@@ -363,6 +385,7 @@ class ResultExtractor:
         >>> depvar = await extractor.get_macro("depvar", "e")
         """
         rc = self._validate_result_class(result_class)
+        name = self._validate_result_name(name)
         code = f"display {rc}({name})"
         output = await self._execute(code)
         if output is None:
