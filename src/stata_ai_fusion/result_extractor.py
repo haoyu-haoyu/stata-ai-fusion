@@ -52,11 +52,15 @@ _MATRIX_LIST_RE = re.compile(
     re.MULTILINE,
 )
 
-# Matches the dimension header of ``matrix list`` output, e.g.:
-#   "e(b)[1,3]"
-_MATRIX_DIM_RE = re.compile(
-    r"^[rec]\(\w+\)\[(\d+),(\d+)\]",
-    re.MULTILINE,
+# Matches the dimension header of ``matrix list`` output, e.g. "e(b)[1,3]".
+# Not anchored at the line start, so it also matches a "symmetric e(V)[3,3]"
+# header (Stata prepends symmetric/upper/lower for special forms).
+_MATRIX_DIM_RE = re.compile(r"[rec]\(\w+\)\[(\d+),(\d+)\]")
+
+# A single matrix-cell token: a number (incl. scientific) or a Stata missing
+# value (".", ".a"–".z").  Used to tell data rows from column-header lines.
+_NUM_TOKEN_RE = re.compile(
+    r"^(?:[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|\.[a-z]?)$"
 )
 
 # A valid stored-result name is a plain Stata identifier.  Names that reach
@@ -104,65 +108,83 @@ def _parse_scalar_value(raw: str) -> float | str | None:
     return raw
 
 
-def _parse_matrix_output(output: str) -> list[list[float]] | None:
+def _parse_matrix_output(output: str) -> list[list[float | None]] | None:
     """Parse the output of ``matrix list <name>`` into a 2-D list.
 
-    Expected format::
+    Handles the three real layouts Stata produces:
 
-        e(b)[1,3]
-                      mpg      weight       _cons
-            y1  -49.512221   1.746559   1946.0687
+    * **Narrow** — one column-header line then one row of values per matrix row::
 
-    Returns ``None`` when the output cannot be parsed.
+          e(b)[1,3]
+                     mpg      weight       _cons
+          y1  -49.512221   1.7465592   1946.0687
+
+    * **Wide** — too many columns to fit, so Stata wraps them into successive
+      column blocks; the SAME row label repeats in each block, so accumulating
+      a row's value tokens by label reassembles the full row.
+
+    * **Symmetric** — the header is ``symmetric e(V)[n,n]`` and Stata prints only
+      the lower triangle (row ``i`` has ``i+1`` values); the full matrix is the
+      mirror.
+
+    Missing values become ``None`` (JSON-safe).  Returns ``None`` when the
+    output cannot be parsed.
     """
     lines = output.strip().splitlines()
     if not lines:
         return None
 
-    # Find the dimension header line.
-    dim_match: re.Match[str] | None = None
-    dim_line_idx = -1
-    for idx, line in enumerate(lines):
-        dim_match = _MATRIX_DIM_RE.search(line)
-        if dim_match:
-            dim_line_idx = idx
+    nrows = ncols = None
+    symmetric = False
+    for line in lines:
+        m = _MATRIX_DIM_RE.search(line)
+        if m:
+            nrows, ncols = int(m.group(1)), int(m.group(2))
+            symmetric = line.strip().lower().startswith("symmetric")
             break
-    if dim_match is None or dim_line_idx < 0:
+    if ncols is None:
         log.debug("Could not locate matrix dimension header in output")
         return None
 
-    nrows = int(dim_match.group(1))
-    ncols = int(dim_match.group(2))
-
-    # The column-header line follows the dimension line.
-    # Data rows start after the column-header line.
-    # We skip the dimension line and the column-header line.
-    data_start = dim_line_idx + 2  # +1 for col headers, +1 for first data row
-    data_lines = lines[data_start:]
-
-    matrix: list[list[float]] = []
-    for line in data_lines:
-        if not line.strip():
-            continue
-        # Each data line has a row label followed by numeric values.
-        # Split on whitespace and take the last *ncols* tokens as values.
+    # Accumulate value tokens per row label (in first-appearance order).  A
+    # data row is a label followed by all-numeric tokens; column-header and
+    # dimension lines have non-numeric tokens and are skipped.  Repeating a
+    # label across wrapped blocks extends that row.
+    order: list[str] = []
+    rows: dict[str, list[float | None]] = {}
+    for line in lines:
         tokens = line.split()
-        if len(tokens) < ncols:
-            # Possibly a continuation line or footer; skip.
+        if len(tokens) < 2:
             continue
-        # The row label(s) occupy the leading tokens; values are the tail.
-        value_tokens = tokens[-ncols:]
-        row: list[float] = []
-        for tok in value_tokens:
-            num = _parse_numeric(tok)
-            row.append(num if num is not None else float("nan"))
-        matrix.append(row)
-        if len(matrix) >= nrows:
-            break
+        label, value_tokens = tokens[0], tokens[1:]
+        if not all(_NUM_TOKEN_RE.match(tok) for tok in value_tokens):
+            continue
+        if label not in rows:
+            order.append(label)
+            rows[label] = []
+        rows[label].extend(_parse_numeric(tok) for tok in value_tokens)
 
-    if not matrix:
+    if not order:
         return None
-    return matrix
+
+    row_values = [rows[label] for label in order]
+    if len(row_values) != nrows:
+        log.debug("Matrix row count does not match the declared dimension")
+        return None
+
+    if symmetric:
+        if any(len(row_values[i]) != i + 1 for i in range(nrows)):
+            log.debug("Symmetric matrix data is not a clean lower triangle")
+            return None
+        return [
+            [row_values[max(i, j)][min(i, j)] for j in range(nrows)]
+            for i in range(nrows)
+        ]
+
+    if any(len(r) != ncols for r in row_values):
+        log.debug("Matrix row length does not match the declared column count")
+        return None
+    return row_values
 
 
 def _parse_return_list(output: str) -> dict:
@@ -332,8 +354,11 @@ class ResultExtractor:
         self,
         name: str,
         result_class: str = "e",
-    ) -> list[list[float]] | None:
-        """Extract a matrix result as a 2-D list of floats.
+    ) -> list[list[float | None]] | None:
+        """Extract a matrix result as a 2-D list.
+
+        Handles narrow, wide (wrapped), and symmetric matrices; missing cells
+        come back as ``None``.
 
         Parameters
         ----------
@@ -344,9 +369,9 @@ class ResultExtractor:
 
         Returns
         -------
-        list[list[float]] | None
-            A row-major 2-D list, or ``None`` when the matrix cannot be
-            retrieved or parsed.
+        list[list[float | None]] | None
+            A row-major 2-D list (``None`` for missing cells), or ``None`` when
+            the matrix cannot be retrieved or parsed.
 
         Examples
         --------
