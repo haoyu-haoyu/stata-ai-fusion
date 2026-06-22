@@ -12,6 +12,7 @@ from stata_ai_fusion.stata_discovery import discover_stata_or_none
 from stata_ai_fusion.stata_session import (
     BatchSession,
     ExecutionResult,
+    PipeSession,
     StataSession,
     strip_smcl,
 )
@@ -24,6 +25,69 @@ requires_stata = pytest.mark.skipif(
     discover_stata_or_none() is None,
     reason="Stata not installed",
 )
+
+
+# ---------------------------------------------------------------------------
+# PipeSession (persistent, no-PTY fallback)
+# ---------------------------------------------------------------------------
+
+
+@requires_stata
+class TestPipeSessionPersistence:
+    """The persistent pipe fallback must keep in-memory state between calls.
+
+    Unlike the interactive :class:`StataSession`, :class:`PipeSession` needs
+    no PTY, so these tests run even in sandboxed environments that deny
+    ``openpty`` (where the interactive fixtures are skipped/errored).
+    """
+
+    async def _new(self) -> PipeSession:
+        installation = discover_stata_or_none()
+        assert installation is not None
+        s = PipeSession(installation)
+        await s.start()
+        return s
+
+    async def test_data_persists_between_calls(self):
+        """Data loaded in one execute() must survive into the next call."""
+        s = await self._new()
+        try:
+            await s.execute("sysuse auto, clear")
+            result = await s.execute("count")  # separate call, same process
+            assert result.return_code == 0
+            assert "74" in result.output
+        finally:
+            await s.close()
+
+    async def test_stored_results_persist_across_calls(self):
+        """e()-class results from a regression must be readable in a later call."""
+        s = await self._new()
+        try:
+            await s.execute("sysuse auto, clear")
+            await s.execute("regress price mpg")
+            result = await s.execute("display e(N)")
+            assert "74" in result.output
+        finally:
+            await s.close()
+
+    async def test_session_survives_error(self):
+        """An error in one call must not kill the persistent session."""
+        s = await self._new()
+        try:
+            bad = await s.execute("this_is_not_a_command")
+            assert bad.return_code == 1
+            assert s.is_alive is True
+            ok = await s.execute("display 1+1")
+            assert "2" in ok.output
+        finally:
+            await s.close()
+
+    async def test_close_releases_process(self):
+        """close() must terminate the process and report not-alive."""
+        s = await self._new()
+        assert s.is_alive is True
+        await s.close()
+        assert s.is_alive is False
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +329,48 @@ class TestMultiSession:
         assert "second" in ids
         for entry in listing:
             assert entry["alive"] is True
-            assert entry["type"] in ("interactive", "batch")
+            assert entry["type"] in ("interactive", "batch", "pipe")
+
+    async def test_concurrent_same_id_dedup(self, session_manager):
+        """Concurrent get_or_create for one id must return one shared session.
+
+        Exercises the reserve-then-start-outside-the-lock path: only one caller
+        should create the session; the others wait and receive the same object.
+        """
+        import anyio
+
+        results: list = []
+
+        async def grab() -> None:
+            results.append(await session_manager.get_or_create("concurrent"))
+
+        async with anyio.create_task_group() as tg:
+            for _ in range(4):
+                tg.start_soon(grab)
+
+        assert len(results) == 4
+        assert all(s is results[0] for s in results)
+        assert results[0].is_alive is True
+
+    async def test_cancel_during_create_does_not_deadlock(self, session_manager):
+        """Cancelling a creation mid-boot must not leak the _creating Event.
+
+        Regression guard: if the per-id creation Event were left unset, every
+        later get_or_create for that id would block forever on wait_event.
+        """
+        import anyio
+
+        # Cancel the first creation while Stata is still booting.
+        with anyio.move_on_after(0.3):
+            await session_manager.get_or_create("cancel_race")
+
+        # The Event must have been cleaned up: a fresh call must NOT hang and
+        # must yield a working session.
+        with anyio.fail_after(90):
+            s = await session_manager.get_or_create("cancel_race")
+        assert s.is_alive is True
+        # No half-created session should linger under another id.
+        assert "cancel_race" in {e["session_id"] for e in await session_manager.list_sessions()}
 
     async def test_close_single_session(self, session_manager):
         """close_session() should remove exactly one session."""
