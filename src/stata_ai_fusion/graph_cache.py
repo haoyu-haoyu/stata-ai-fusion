@@ -197,15 +197,20 @@ class GraphCache:
 # ---------------------------------------------------------------------------
 
 # Patterns that indicate the Stata code produces graphical output.
-# We look for common graph commands at the start of a line (possibly after
-# whitespace or a `quietly` prefix).
+# Anchored with ``^`` under ``re.MULTILINE`` so that ``match.start()`` is the
+# start of the graph command's own line (NOT the preceding newline) — the
+# caller relies on that to compute the correct line index for insertion.
 _GRAPH_CMD_RE = re.compile(
     r"""
-    (?:^|\n)                     # start of string or new line
+    ^                            # start of a line (re.MULTILINE)
     [ \t]*                       # optional leading whitespace
     (?:qui(?:etly)?[ \t]+)?      # optional quietly prefix
     (?:
-        graph\b                  # graph (draw / twoway / …)
+        # `graph` and `graph <plottype>` draw, but the management
+        # subcommands below draw nothing — exclude them so we don't inject an
+        # export that errors ("no graph") or captures a stale/unrelated graph.
+        graph\b
+        (?![ \t]+(?:drop|dir|describe|rename|copy|query|close|set|save|export)\b)
       | tw(?:oway)?\b            # twoway shorthand
       | scatter\b                # scatter
       | line\b                   # line
@@ -221,7 +226,7 @@ _GRAPH_CMD_RE = re.compile(
       | coefplot\b               # coefplot (user-written but very common)
     )
     """,
-    re.VERBOSE,
+    re.VERBOSE | re.MULTILINE,
 )
 
 # Detects an existing graph export command anywhere in the code.
@@ -270,7 +275,9 @@ def maybe_inject_graph_export(code: str, tmpdir: Path) -> str:
     result_lines = list(lines)  # mutable copy
 
     for m in reversed(matches):
-        # Find which line number the match falls on.
+        # Which line the command starts on.  Because _GRAPH_CMD_RE is anchored
+        # with ``^`` (re.MULTILINE), m.start() is the start of the command's own
+        # line, so the count of preceding newlines is exactly its 0-based index.
         char_pos = m.start()
         line_idx = code[:char_pos].count("\n")
 
