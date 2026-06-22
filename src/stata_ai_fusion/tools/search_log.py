@@ -10,6 +10,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+import anyio
 from mcp.types import TextContent, Tool
 
 if TYPE_CHECKING:
@@ -18,6 +19,13 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 TOOL_NAME = "stata_search_log"
+
+# Guards against a user-supplied regex causing catastrophic backtracking
+# (ReDoS): the match loop runs in a worker thread bounded by this timeout, so a
+# pathological pattern can never block the event loop and stall other sessions.
+_MAX_QUERY_LEN = 1000
+_SEARCH_TIMEOUT = 5.0  # seconds
+_MAX_CONTEXT_LINES = 50
 
 TOOL_DEF = Tool(
     name=TOOL_NAME,
@@ -67,11 +75,19 @@ async def handle(
     query: str = arguments.get("query", "")
     use_regex: bool = arguments.get("regex", False)
     case_sensitive: bool = arguments.get("case_sensitive", False)
-    context_lines: int = arguments.get("context_lines", 2)
+    context_lines: int = max(0, min(int(arguments.get("context_lines", 2)), _MAX_CONTEXT_LINES))
     session_id: str = arguments.get("session_id", "default")
 
     if not query.strip():
         return [TextContent(type="text", text="Error: no search query provided.")]
+
+    if len(query) > _MAX_QUERY_LEN:
+        return [
+            TextContent(
+                type="text",
+                text=f"Error: query too long (max {_MAX_QUERY_LEN} characters).",
+            )
+        ]
 
     session = await session_manager.get_session(session_id)
     if session is None:
@@ -93,11 +109,30 @@ async def handle(
     except re.error as exc:
         return [TextContent(type="text", text=f"Invalid regex pattern: {exc}")]
 
-    # Find matching line indices
-    match_indices: list[int] = []
-    for i, line in enumerate(lines):
-        if pattern.search(line):
-            match_indices.append(i)
+    # Find matching line indices in a worker thread bounded by a timeout, so a
+    # pathological regex (catastrophic backtracking) frees the event loop and
+    # never stalls other sessions.  (On timeout the worker is abandoned and may
+    # keep running until the regex completes — an accepted, low-severity CPU
+    # residual for this local single-client server; a thread cannot be killed.)
+    def _find_matches() -> list[int]:
+        return [i for i, line in enumerate(lines) if pattern.search(line)]
+
+    try:
+        with anyio.fail_after(_SEARCH_TIMEOUT):
+            match_indices = await anyio.to_thread.run_sync(
+                _find_matches, abandon_on_cancel=True
+            )
+    except TimeoutError:
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    f"Error: search timed out after {_SEARCH_TIMEOUT:.0f}s — the "
+                    "regex may be too complex (catastrophic backtracking). "
+                    "Simplify the pattern."
+                ),
+            )
+        ]
 
     if not match_indices:
         return [TextContent(type="text", text=f"No matches found for: {query}")]

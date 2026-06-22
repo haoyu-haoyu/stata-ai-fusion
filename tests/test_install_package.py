@@ -86,3 +86,38 @@ async def test_empty_package_name_rejected(empty: str):
     result = await handle(_FakeManager(sess), {"package": empty})
     assert "no package name" in result[0].text.lower()
     assert sess.calls == []
+
+
+async def test_from_url_builds_net_install():
+    sess = _FakeSession(which_rc=111)
+    await handle(
+        _FakeManager(sess),
+        {"package": "mypkg", "from_url": "https://example.com/repo/"},
+    )
+    assert any(
+        'net install mypkg, from("https://example.com/repo/") replace' in c
+        for c in sess.calls
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    ['http://x" ; shell evil', "http://x$(whoami)", "https://a b/c", "not_a_url"],
+)
+async def test_invalid_from_url_rejected(bad_url: str):
+    sess = _FakeSession(which_rc=111)
+    result = await handle(
+        _FakeManager(sess), {"package": "mypkg", "from_url": bad_url}
+    )
+    assert "from_url must be" in result[0].text.lower()
+    assert not sess.ran_install()  # never reached the install step
+
+
+async def test_from_ssc_false_without_url_errors():
+    sess = _FakeSession(which_rc=111)
+    result = await handle(
+        _FakeManager(sess), {"package": "mypkg", "from_ssc": False}
+    )
+    text = result[0].text.lower()
+    assert "from_url" in text or "from_ssc" in text
+    assert not sess.ran_install()

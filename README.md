@@ -45,7 +45,7 @@ The project ships as three complementary components so every workflow is covered
 
 The data flow is straightforward:
 
-1. **AI Assistant** sends a tool call (e.g. `run_command`) via MCP.
+1. **AI Assistant** sends a tool call (e.g. `stata_run_command`) via MCP.
 2. **MCP Server** dispatches the request to the **Session Manager**, which maintains one or more persistent, interactive Stata processes.
 3. **Stata** executes the command; the server captures output, strips SMCL markup, detects errors, and auto-exports any new graphs.
 4. The cleaned result (text + optional base64 image) flows back to the AI, which interprets it and responds to the user.
@@ -141,12 +141,12 @@ The server exposes 11 MCP tools. Each tool can be called by any MCP-compatible A
 ```
 User: "Analyze the determinants of car prices in the auto dataset."
 
-AI calls: run_command("sysuse auto, clear")
-AI calls: inspect_data()                          -> 74 obs, 12 variables
-AI calls: run_command("regress price mpg weight foreign, robust")
-AI calls: get_results("e", "N r2 F")              -> N=74, R²=0.52, F=29.1
-AI calls: run_command("scatter price mpg || lfit price mpg")
-AI calls: export_graph(format="png")               -> [base64 image]
+AI calls: stata_run_command("sysuse auto, clear")
+AI calls: stata_inspect_data()                    -> 74 obs, 12 variables
+AI calls: stata_run_command("regress price mpg weight foreign, robust")
+AI calls: stata_get_results("e", "N,r2,F")        -> N=74, R²=0.52, F=29.1
+AI calls: stata_run_command("scatter price mpg || lfit price mpg")
+AI calls: stata_export_graph(format="png")        -> [base64 image]
 
 AI: "The regression shows that each additional mile per gallon is associated
      with a $49.50 decrease in price, controlling for weight and origin..."
@@ -177,17 +177,17 @@ The knowledge base uses a **Progressive Disclosure** architecture:
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `run_command` | Execute short ad-hoc Stata commands interactively | `run_command(code="regress price mpg weight, robust")` |
-| `run_do_file` | Run a `.do` file in batch mode (reliable for long scripts) | `run_do_file(path="/path/to/analysis.do")` |
-| `inspect_data` | Describe the current dataset in memory | Returns obs count, variable names, types, labels |
-| `codebook` | Generate codebook for specific variables | `codebook(variables="price mpg foreign")` |
-| `get_results` | Extract stored results (r/e/c class) | `get_results(result_class="e", keys="N r2")` |
-| `export_graph` | Export current graph as PNG/SVG/PDF | Returns base64-encoded image data |
-| `search_log` | Search through the Stata session log | `search_log(query="error", regex=true)` |
-| `install_package` | Install SSC or user-written packages | `install_package(package="reghdfe")` |
-| `cancel_command` | Send interrupt (SIGINT) to cancel a running command | `cancel_command(session_id="default")` |
-| `list_sessions` | List all active Stata sessions | Returns session IDs, types, alive status |
-| `close_session` | Close a specific Stata session | `close_session(session_id="default")` |
+| `stata_run_command` | Execute short ad-hoc Stata commands interactively | `stata_run_command(code="regress price mpg weight, robust")` |
+| `stata_run_do_file` | Run a `.do` file in batch mode (reliable for long scripts) | `stata_run_do_file(path="/path/to/analysis.do")` |
+| `stata_inspect_data` | Describe the current dataset in memory | Returns obs count, variable names, types, labels |
+| `stata_codebook` | Generate codebook for specific variables | `stata_codebook(variables="price mpg foreign")` |
+| `stata_get_results` | Extract stored results (r/e/c class) | `stata_get_results(result_class="e", keys="N,r2")` |
+| `stata_export_graph` | Export current graph as PNG/SVG/PDF | Returns base64-encoded image data |
+| `stata_search_log` | Search through the Stata session log | `stata_search_log(query="error", regex=true)` |
+| `stata_install_package` | Install SSC or user-written packages | `stata_install_package(package="reghdfe")` |
+| `stata_cancel_command` | Send interrupt (SIGINT) to cancel a running command | `stata_cancel_command(session_id="default")` |
+| `stata_list_sessions` | List all active Stata sessions | Returns session IDs, types, alive status |
+| `stata_close_session` | Close a specific Stata session | `stata_close_session(session_id="default")` |
 
 ---
 
@@ -255,8 +255,8 @@ The server supports multiple concurrent Stata sessions with complete data isolat
 - All sessions are cleaned up gracefully on server shutdown.
 
 ```
-AI calls: run_command(code="sysuse auto, clear", session_id="session_A")
-AI calls: run_command(code="sysuse nlsw88, clear", session_id="session_B")
+AI calls: stata_run_command(code="sysuse auto, clear", session_id="session_A")
+AI calls: stata_run_command(code="sysuse nlsw88, clear", session_id="session_B")
 # session_A has 74 obs (auto), session_B has 2,246 obs (nlsw88)
 ```
 
@@ -426,10 +426,10 @@ Some antivirus software blocks `pexpect` from spawning Stata. Add your Stata dir
 
 **Fix it:**
 - Simply run another command — the server auto-creates a new default session
-- If you need a specific named session: ask the AI to call `create_session`
-- For long-running batch jobs, use `run_do_file` with `batch_mode=true` (designed for extended execution)
+- If you need a specific named session: pass a `session_id` to any tool (sessions are created on demand)
+- For long-running batch jobs, use `stata_run_do_file` — it always runs in batch mode, designed for extended execution
 
-**Tip:** You can check active sessions at any time by asking the AI to call `list_sessions`.
+**Tip:** You can check active sessions at any time by asking the AI to call `stata_list_sessions`.
 
 </details>
 
@@ -439,11 +439,11 @@ Some antivirus software blocks `pexpect` from spawning Stata. Add your Stata dir
 By design, the server truncates very large outputs to stay within AI context window limits:
 - **Head:** first 3,000 characters
 - **Tail:** last 5,000 characters
-- **Inline graphs:** up to 5 per `run_command`, 3 per `run_do_file`
+- **Inline graphs:** up to 5 per `stata_run_command`, 3 per `stata_run_do_file`
 
-For large outputs, use `run_do_file` with `batch_mode=true` — this captures all output to a log file and returns a summary instead of the full text.
+For large outputs, use `stata_run_do_file` — it runs in batch mode, capturing all output to a log file and returning a summary instead of the full text.
 
-For graphs, use `export_graph` to save specific graphs to files at full resolution rather than relying on inline preview.
+For graphs, use `stata_export_graph` to save specific graphs to files at full resolution rather than relying on inline preview.
 
 </details>
 

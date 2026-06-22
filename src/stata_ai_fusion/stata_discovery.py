@@ -284,6 +284,30 @@ def _build_installation(path: Path) -> StataInstallation:
     )
 
 
+# Edition capability ranking, used only to break ties between installations of
+# the same version (MP is the most capable).
+_EDITION_RANK: dict[str, int] = {"MP": 4, "SE": 3, "IC": 2, "BE": 1}
+
+
+def _select_best(candidates: list[Path]) -> StataInstallation | None:
+    """Return the best installation among *candidates*, or ``None`` if empty.
+
+    "Best" = newest version, then most capable edition.  This replaces the old
+    behaviour of taking the lexicographically-first glob match, which picked the
+    *oldest* version (and ordered ``Stata9`` after ``Stata18``).
+    """
+    best: StataInstallation | None = None
+    best_key: tuple[int, int] | None = None
+    for candidate in candidates:
+        if not _is_executable(candidate):
+            continue
+        inst = _build_installation(candidate)
+        key = (inst.version or 0, _EDITION_RANK.get(inst.edition, 0))
+        if best_key is None or key > best_key:
+            best, best_key = inst, key
+    return best
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -322,23 +346,16 @@ def discover_stata() -> StataInstallation:
         platform_key = "linux"
 
     patterns = SEARCH_PATHS.get(platform_key, [])
-    candidates = _resolve_glob_paths(patterns)
-
-    for candidate in candidates:
-        logger.debug("Checking common path: %s", candidate)
-        if _is_executable(candidate):
-            installation = _build_installation(candidate)
-            logger.info("Stata found at common path: %s", installation)
-            return installation
+    installation = _select_best(_resolve_glob_paths(patterns))
+    if installation is not None:
+        logger.info("Stata found at common path: %s", installation)
+        return installation
 
     # ----- 3. which / shutil.which -----------------------------------------
-    which_candidates = _try_which()
-    for candidate in which_candidates:
-        logger.debug("Checking which result: %s", candidate)
-        if _is_executable(candidate):
-            installation = _build_installation(candidate)
-            logger.info("Stata found via which: %s", installation)
-            return installation
+    installation = _select_best(_try_which())
+    if installation is not None:
+        logger.info("Stata found via which: %s", installation)
+        return installation
 
     # ----- Nothing found ---------------------------------------------------
     logger.info("No Stata installation discovered")
