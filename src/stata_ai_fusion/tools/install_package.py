@@ -39,6 +39,14 @@ TOOL_DEF = Tool(
                 "description": "Install from SSC. Default true.",
                 "default": True,
             },
+            "from_url": {
+                "type": "string",
+                "description": (
+                    "Custom source for `net install` (an http(s) URL or absolute "
+                    "path). Required when from_ssc is false; if given, it takes "
+                    "precedence over SSC."
+                ),
+            },
             "session_id": {
                 "type": "string",
                 "description": "Session identifier. Default 'default'.",
@@ -54,6 +62,11 @@ TOOL_DEF = Tool(
 # reliable signal of whether a package exists is `_rc`, which we print and parse.
 _RC_MARKER = "__stata_pkg_rc="
 _RC_RE = re.compile(rf"{re.escape(_RC_MARKER)}(-?\d+)")
+
+# A custom `net install` source: an http(s) URL or an absolute path, restricted
+# to characters that cannot break out of the surrounding Stata `from("...")`
+# string (no quotes, whitespace, backtick, $, ; or newlines).
+_FROM_URL_RE = re.compile(r"^(?:https?://[A-Za-z0-9._~:/?=%\-]+|/[A-Za-z0-9._~/\-]+)$")
 
 
 def _parse_check_rc(output: str | None) -> int | None:
@@ -75,6 +88,7 @@ async def handle(
     """Check for and install a Stata package."""
     package: str = arguments.get("package", "")
     from_ssc: bool = arguments.get("from_ssc", True)
+    from_url: str = (arguments.get("from_url") or "").strip()
     session_id: str = arguments.get("session_id", "default")
 
     if not package.strip():
@@ -123,11 +137,33 @@ async def handle(
     # check_rc is non-zero (not installed) or None (marker missing / unknown);
     # fall through and attempt the install — `, replace` makes it idempotent.
 
-    # Step 2: Install the package
-    if from_ssc:
+    # Step 2: Install the package.  `net install` needs a source, so the
+    # non-SSC path requires a from_url — the old `net install <pkg>` with no
+    # source always errored.
+    if from_url:
+        if not _FROM_URL_RE.match(from_url):
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        "Error: from_url must be an http(s) URL or absolute path "
+                        "(no quotes, spaces, or other special characters)."
+                    ),
+                )
+            ]
+        install_code = f'net install {package}, from("{from_url}") replace'
+    elif from_ssc:
         install_code = f"ssc install {package}, replace"
     else:
-        install_code = f"net install {package}, replace"
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    "Error: set from_ssc=true to install from SSC, or provide "
+                    "from_url for a custom `net install` source."
+                ),
+            )
+        ]
 
     try:
         install_result = await session.execute(install_code, timeout=120)
