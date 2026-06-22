@@ -122,10 +122,10 @@ The AI will now reference the 5,653-line knowledge base when writing Stata code 
 # Search "Stata AI Fusion" in the Extensions panel
 
 # Option 2: From GitHub Release
-code --install-extension stata-ai-fusion-0.2.3.vsix
+code --install-extension stata-ai-fusion-0.3.0.vsix
 
 # Option 3: Cursor
-cursor --install-extension stata-ai-fusion-0.2.3.vsix
+cursor --install-extension stata-ai-fusion-0.3.0.vsix
 ```
 
 ---
@@ -476,11 +476,11 @@ cd vscode-extension && npm install && npm run build
 
 | Test Suite | Count | Requires Stata |
 |------------|------:|:--------------:|
-| `test_discovery.py` | 39 | No |
-| `test_integration.py` | 46 | Yes |
-| **Total** | **85** | |
+| Unit tests (discovery, result/matrix parsing, injection, ReDoS, graph, …) | 118 | No |
+| `test_integration.py` | 52 | Yes |
+| **Total** | **170** | |
 
-All 85 tests pass on Stata MP 19 (macOS arm64).
+The 118 unit tests run without Stata; all 170 pass on Stata MP 19 (macOS arm64).
 
 ---
 
@@ -503,7 +503,7 @@ stata-ai-fusion/
 │   ├── src/                 # TypeScript extension source (5 files)
 │   ├── syntaxes/            # TextMate grammar
 │   └── snippets/            # 30 code snippets
-├── tests/                   # 85 tests (39 unit + 46 integration)
+├── tests/                   # 170 tests (118 unit + 52 integration)
 ├── assets/                  # Icon, architecture diagrams
 └── pyproject.toml
 ```
