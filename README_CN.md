@@ -121,10 +121,10 @@ AI 将在编写 Stata 代码时参考这个 5,653 行的知识库。
 # 方法 1: 在 VS Code 扩展面板搜索 "Stata AI Fusion"
 
 # 方法 2: 从 GitHub Release 下载
-code --install-extension stata-ai-fusion-0.2.3.vsix
+code --install-extension stata-ai-fusion-0.3.0.vsix
 
 # 方法 3: Cursor
-cursor --install-extension stata-ai-fusion-0.2.3.vsix
+cursor --install-extension stata-ai-fusion-0.3.0.vsix
 ```
 
 ---
@@ -287,11 +287,11 @@ cd vscode-extension && npm install && npm run build
 
 | 测试套件 | 数量 | 需要 Stata |
 |----------|-----:|:----------:|
-| `test_discovery.py` | 39 | 否 |
-| `test_integration.py` | 46 | 是 |
-| **合计** | **85** | |
+| 单元测试（发现、结果/矩阵解析、注入、ReDoS、图形等） | 118 | 否 |
+| `test_integration.py` | 52 | 是 |
+| **合计** | **170** | |
 
-全部 85 个测试在 Stata MP 19 (macOS arm64) 上通过。
+118 个单元测试无需 Stata；全部 170 个在 Stata MP 19 (macOS arm64) 上通过。
 
 ---
 
@@ -314,7 +314,7 @@ stata-ai-fusion/
 │   ├── src/                 # TypeScript 扩展源码（5 个文件）
 │   ├── syntaxes/            # TextMate 语法规则
 │   └── snippets/            # 30 个代码片段
-├── tests/                   # 85 个测试（39 单元 + 46 集成）
+├── tests/                   # 170 个测试（118 单元 + 52 集成）
 ├── assets/                  # 图标、架构图
 └── pyproject.toml
 ```

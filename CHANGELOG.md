@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0 (2026-06-22)
+
+### Added
+- **Persistent sessions without a PTY**: a new `PipeSession` keeps a single Stata process alive over stdin (output read from a log file) on hosts that deny PTY allocation (e.g. sandboxed launches). In-memory data, scalars, macros, and `e()`/`r()` results now persist between tool calls, and `stata_cancel_command` works. Fallback order is interactive (pexpect) → pipe → batch.
+- **`stata_install_package` `from_url`**: install from a custom `net install` source (an http(s) URL or absolute path, validated to block injection).
+
+### Fixed
+- **Graph auto-export off-by-one**: the injected `graph export` was placed *before* a graph command that wasn't on the first line (Stata `r(601)`, no image returned); it is now inserted after, and non-rendering `graph` subcommands (`drop`, `dir`, …) no longer trigger a spurious export.
+- **`stata_install_package` never installed missing packages**: `capture which` suppressed the "not found"/`r(111)`, so every missing package was reported "already installed"; the check now reads `_rc` explicitly.
+- **Error-detection false positives**: a return code merely mentioned in output text (e.g. `display "see r(198)"`) was reported as an error; detection is now anchored to `r(NNN);` at the start of a line.
+- **`stata_get_results` command injection**: the `keys` field reached executed Stata code unvalidated; stored-result names are now validated against a Stata-identifier whitelist (`get_scalar`/`get_matrix`/`get_macro`).
+- **Discovery picked the oldest Stata**: with several versions installed, the lexicographically-first glob match (the oldest) was chosen; it now selects the newest version, then the most capable edition.
+- **`stata_search_log` ReDoS**: a caller-supplied regex ran on the asyncio event loop with no timeout; the match loop now runs in a worker thread bounded by a timeout (and `context_lines` is clamped).
+- **Matrix parsing**: `get_matrix` returned `None` for symmetric (`symmetric e(V)[n,n]`, lower-triangle) and wide/wrapped matrices and emitted invalid-JSON `nan`; it now parses all three layouts and maps missing values to `null`.
+- **VS Code extension**: corrected the tool names (`run_command` → `stata_run_command`) and argument (`file_path` → `path`) so Run Selection/Run File work; the client now sends `notifications/initialized`; and `autoConfigureMcp` no longer deletes the user's other MCP servers when `mcp.json` contains JSONC comments or fails to parse.
+
+### Changed
+- **Removed the `echo` parameter** from `stata_run_command`: it injected `set output inform`, which suppressed *results* (not echoes) and, in a persistent session, was never reset — poisoning later commands. It had no correct implementation.
+- Documentation: corrected MCP tool names and examples in both READMEs.
+
 ## 0.2.2 (2026-02-27)
 
 ### Security
