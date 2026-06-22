@@ -6,6 +6,7 @@ the SEARCH_PATHS data without requiring a Stata installation on the machine.
 
 from __future__ import annotations
 
+import stat
 import sys
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from stata_ai_fusion.stata_discovery import (
     StataInstallation,
     StataNotFoundError,
     _edition_from_name,
+    _resolve_glob_paths,
+    _select_best,
     _version_from_path,
     discover_stata,
     discover_stata_or_none,
@@ -174,6 +177,45 @@ class TestStataInstallation:
         inst = StataInstallation(path=Path("/fake"), edition="MP", version=18)
         with pytest.raises(AttributeError):
             inst.edition = "SE"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Version-aware selection (_select_best)
+# ---------------------------------------------------------------------------
+
+
+class TestVersionSelection:
+    """`_select_best` must choose the NEWEST version, not the first match."""
+
+    @staticmethod
+    def _make_stata(directory: Path, exe_name: str = "stata-mp") -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        exe = directory / exe_name
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+        return exe
+
+    def test_selects_newest_version_not_lexicographic_first(self, tmp_path):
+        # Lexicographic order is Stata17, Stata18, Stata9 — so the old code
+        # picked 17 (and 9 sorts last). The newest is 18.
+        for v in ("Stata17", "Stata18", "Stata9"):
+            self._make_stata(tmp_path / v)
+        cands = _resolve_glob_paths([str(tmp_path / "Stata*" / "stata-mp")])
+        best = _select_best(cands)
+        assert best is not None
+        assert best.version == 18
+
+    def test_edition_breaks_version_tie(self, tmp_path):
+        self._make_stata(tmp_path / "a" / "Stata18", "stata")  # IC
+        self._make_stata(tmp_path / "b" / "Stata18", "stata-mp")  # MP
+        cands = _resolve_glob_paths([str(tmp_path / "*" / "Stata18" / "stata*")])
+        best = _select_best(cands)
+        assert best is not None
+        assert best.version == 18
+        assert best.edition == "MP"  # MP preferred over IC at the same version
+
+    def test_empty_candidates_returns_none(self):
+        assert _select_best([]) is None
 
 
 # ---------------------------------------------------------------------------
